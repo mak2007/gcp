@@ -68,8 +68,8 @@ async def receive_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check for existing submission of this email
     existing = await db.get_submission_by_email(clean_email)
     if existing:
-        # If already accepted, block
-        if existing["status"] == "ACCEPTED":
+        can_resub, reason, rem_h, rem_m = db.check_resubmit_eligibility(existing)
+        if reason == "ACCEPTED":
             await update.message.reply_text(
                 f"🚫 <b>SUBMISSION REJECTED: ALREADY ACCEPTED</b>\n\n"
                 f"The email <code>{clean_email}</code> has already been accepted and processed.\n\n"
@@ -80,30 +80,41 @@ async def receive_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
             return ConversationHandler.END
 
-        # Check 8-hour cooldown
-        last_time = existing.get("resubmitted_at") or existing.get("updated_at") or existing.get("created_at")
-        can_resubmit, rem_h, rem_m = db.check_8_hour_cooldown(last_time)
-        if not can_resubmit:
+        if reason == "NOT_UNLOCKED":
+            st = existing.get("status", "PENDING")
             await update.message.reply_text(
-                f"⏱️ <b>8-HOUR COOLDOWN ACTIVE</b>\n\n"
-                f"The email <code>{clean_email}</code> was submitted previously.\n"
-                f"You can only resubmit this email after <b>8 hours</b> from the previous submission.\n\n"
-                f"⏳ <b>Time Remaining:</b> <b>{rem_h}h {rem_m}m</b>\n\n"
-                f"Please wait until the 8-hour cooldown expires before resubmitting.",
+                f"🚫 <b>RESUBMISSION NOT PERMITTED</b>\n\n"
+                f"The email <code>{clean_email}</code> is already in our records (Status: <b>{st}</b>).\n\n"
+                f"⚠️ <b>Policy:</b> You cannot resubmit an email unless an admin explicitly unlocks it from their side.\n\n"
+                f"If your submission was disapproved, please use the <b>⚖️ Submit Appeal</b> button to request a review.",
                 parse_mode=ParseMode.HTML,
                 reply_markup=main_menu_keyboard(is_admin)
             )
             context.user_data.clear()
             return ConversationHandler.END
 
-        # Cooldown passed! Allow resubmission
+        if reason == "COOLDOWN_ACTIVE":
+            unlocked_time = existing.get("resubmit_unlocked_at") or "recently"
+            await update.message.reply_text(
+                f"⏱️ <b>8-HOUR POST-UNLOCK COOLDOWN ACTIVE</b>\n\n"
+                f"Admin approved resubmission for <code>{clean_email}</code> on {unlocked_time}.\n\n"
+                f"However, resubmission is only allowed <b>8 hours after admin approval</b>.\n\n"
+                f"⏳ <b>Time Remaining:</b> <b>{rem_h}h {rem_m}m</b>\n\n"
+                f"Please wait until the cooldown expires before resubmitting.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu_keyboard(is_admin)
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
+
+        # Cooldown passed and admin unlocked!
         context.user_data["resubmitting_id"] = existing["id"]
         context.user_data["sub_email"] = clean_email
         await update.message.reply_text(
             f"🔄 <b>Resubmission Allowed:</b> <code>{clean_email}</code>\n"
-            f"<i>(8-hour cooldown passed. Please enter your updated details.)</i>\n\n"
+            f"<i>(Admin approval confirmed & 8-hour cooldown has elapsed. Please enter your updated details.)</i>\n\n"
             f"🔒 <b>Step 2 of 3: Enter PASS</b>\n"
-            f"Please enter your <b>PASS</b>:",
+            f"Please enter your updated <b>PASS</b>:",
             parse_mode=ParseMode.HTML,
             reply_markup=cancel_keyboard()
         )
@@ -368,3 +379,31 @@ async def sub_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=main_menu_keyboard(is_admin)
     )
     return ConversationHandler.END
+
+async def start_resubmission_from_appeal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    sub_id = int(query.data.split(":")[1])
+    sub = await db.get_submission_by_id(sub_id)
+    if not sub:
+        await query.edit_message_text("⚠️ Submission not found.")
+        return ConversationHandler.END
+
+    can_resub, reason, rem_h, rem_m = db.check_resubmit_eligibility(sub)
+    if not can_resub:
+        await query.answer(f"⏱️ Cooldown active: {rem_h}h {rem_m}m remaining!", show_alert=True)
+        return ConversationHandler.END
+
+    context.user_data.clear()
+    context.user_data["sub_email"] = sub["email"]
+    context.user_data["resubmitting_id"] = sub["id"]
+
+    await query.edit_message_text(
+        f"🔄 <b>Resubmission Started for:</b> <code>{sub['email']}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"🔒 <b>Step 2 of 3: Enter PASS</b>\n"
+        f"Please enter your updated <b>PASS</b>:\n\n"
+        f"<i>(Or send ❌ Cancel anytime)</i>",
+        parse_mode=ParseMode.HTML
+    )
+    return WAIT_PASS

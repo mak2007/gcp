@@ -31,6 +31,7 @@ from handlers.user import (
 )
 from handlers.submission import (
     start_submission,
+    start_resubmission_from_appeal,
     receive_email,
     receive_pass,
     receive_key,
@@ -44,6 +45,8 @@ from handlers.submission import (
 )
 from handlers.appeal import (
     start_appeal,
+    appeal_select_callback,
+    cooldown_alert_callback,
     receive_appeal_text,
     WAIT_APPEAL_TEXT
 )
@@ -70,7 +73,10 @@ from handlers.admin import (
     admin_broadcast_do_callback,
     admin_broadcast_cancel_callback,
     admin_quick_broadcast_command,
-    WAIT_ADMIN_BROADCAST
+    WAIT_ADMIN_BROADCAST,
+    admin_req_txt_prompt_callback,
+    receive_admin_batch_count,
+    WAIT_ADMIN_BATCH_COUNT
 )
 
 # Logging configuration
@@ -110,7 +116,8 @@ def main():
     submission_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^📝 Submit Information$"), start_submission),
-            CommandHandler("submit", start_submission)
+            CommandHandler("submit", start_submission),
+            CallbackQueryHandler(start_resubmission_from_appeal, pattern=r"^usr_start_resub:\d+$")
         ],
         states={
             WAIT_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_email)],
@@ -135,7 +142,8 @@ def main():
     appeal_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^⚖️ Submit Appeal$"), start_appeal),
-            CommandHandler("appeal", start_appeal)
+            CommandHandler("appeal", start_appeal),
+            CallbackQueryHandler(appeal_select_callback, pattern=r"^usr_start_appeal:\d+$")
         ],
         states={
             WAIT_APPEAL_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_appeal_text)],
@@ -183,7 +191,23 @@ def main():
     )
     app.add_handler(broadcast_conv)
 
-    # 5. Standard Commands & Buttons
+    # 5. Admin Custom Batch TXT Conversation Handler
+    batch_txt_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(admin_req_txt_prompt_callback, pattern=r"^adm_req_txt_prompt$")
+        ],
+        states={
+            WAIT_ADMIN_BATCH_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_admin_batch_count)],
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
+            CommandHandler("cancel", cancel_conversation)
+        ],
+        allow_reentry=True
+    )
+    app.add_handler(batch_txt_conv)
+
+    # 6. Standard Commands & Buttons
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("status", check_status_handler))
     app.add_handler(MessageHandler(filters.Regex("^📊 Check Status & Queue$"), check_status_handler))
@@ -191,6 +215,7 @@ def main():
     # User Callbacks
     app.add_handler(CallbackQueryHandler(continue_main_callback, pattern=r"^usr_continue_main$"))
     app.add_handler(CallbackQueryHandler(refresh_status_callback, pattern=r"^usr_refresh_status$"))
+    app.add_handler(CallbackQueryHandler(cooldown_alert_callback, pattern=r"^usr_cooldown_alert:\d+$"))
 
     # 6. Admin Commands & Handlers
     app.add_handler(CommandHandler("admin", admin_dashboard_command))

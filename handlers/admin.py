@@ -3,7 +3,7 @@ import csv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
-from config import ADMIN_IDS
+from config import ADMIN_IDS, SUPPORT_HANDLE
 import database as db
 from keyboards import admin_submission_actions_keyboard, admin_dashboard_keyboard
 
@@ -60,14 +60,16 @@ async def admin_dashboard_command(update: Update, context: ContextTypes.DEFAULT_
     text = (
         f"⚙️ <b>Admin Control Dashboard</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 <b>Submissions Overview:</b>\n"
-        f"• <b>Total Submissions:</b> {stats['total']}\n"
-        f"• ⏳ <b>Pending in Queue:</b> {stats['pending']}\n"
+        f"📦 <b>INVENTORY & STOCK OVERVIEW:</b>\n"
+        f"• 🆕 <b>New Accounts:</b> {stats['new_total']} (⏳ {stats['new_pending']} pending)\n"
+        f"• 🔄 <b>Resubmitted Accounts:</b> {stats['resubmitted_total']} (⏳ {stats['resubmitted_pending']} pending)\n"
+        f"• 📦 <b>Total Accounts in Pool:</b> {stats['total']}\n\n"
+        f"📊 <b>STATUS BREAKDOWN:</b>\n"
+        f"• ⏳ <b>Pending Queue:</b> {stats['pending']}\n"
         f"• 🔍 <b>In Review:</b> {stats['in_review']}\n"
-        f"• 🔄 <b>Resubmitted Emails:</b> {stats.get('resubmitted', 0)}\n"
-        f"• ✅ <b>Accepted (Paid/Queued):</b> {stats['accepted']}\n"
+        f"• ✅ <b>Accepted (Paid):</b> {stats['accepted']}\n"
         f"• ❌ <b>Disapproved:</b> {stats['disapproved']}\n"
-        f"• 🔄 <b>Can Be Resubmitted:</b> {stats['can_resubmit']}\n"
+        f"• 🔓 <b>Unlocked for Resubmit:</b> {stats['can_resubmit']}\n"
         f"• ⚖️ <b>Pending Appeals:</b> {stats['appeals_pending']}\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"Select an action below:"
@@ -94,15 +96,18 @@ async def admin_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     stats = await db.get_admin_stats()
     text = (
-        f"⚙️ <b>Admin Live Statistics</b>\n"
+        f"⚙️ <b>Investor & Stock Statistics</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"• <b>Total Submissions:</b> {stats['total']}\n"
+        f"📦 <b>INVENTORY:</b>\n"
+        f"• 🆕 <b>New Accounts:</b> {stats['new_total']} (⏳ {stats['new_pending']} pending)\n"
+        f"• 🔄 <b>Resubmitted Accounts:</b> {stats['resubmitted_total']} (⏳ {stats['resubmitted_pending']} pending)\n"
+        f"• 📦 <b>Total Database Accounts:</b> {stats['total']}\n\n"
+        f"📊 <b>STATUS COUNTS:</b>\n"
         f"• ⏳ <b>Pending in Queue:</b> {stats['pending']}\n"
         f"• 🔍 <b>In Review:</b> {stats['in_review']}\n"
-        f"• 🔄 <b>Resubmitted Emails:</b> {stats.get('resubmitted', 0)}\n"
         f"• ✅ <b>Accepted:</b> {stats['accepted']}\n"
         f"• ❌ <b>Disapproved:</b> {stats['disapproved']}\n"
-        f"• 🔄 <b>Can Be Resubmitted:</b> {stats['can_resubmit']}\n"
+        f"• 🔓 <b>Unlocked for Resubmit:</b> {stats['can_resubmit']}\n"
         f"• ⚖️ <b>Pending Appeals:</b> {stats['appeals_pending']}\n"
         f"━━━━━━━━━━━━━━━━━━━"
     )
@@ -267,6 +272,30 @@ async def admin_change_status_callback(update: Update, context: ContextTypes.DEF
     updated_sub = await db.update_submission_status(sub_id, new_status)
     user_id = sub["user_id"]
 
+    if new_status == "PENDING":
+        updated_sub = await db.update_submission_status(sub_id, "PENDING", admin_notes=None)
+        user_msg = (
+            f"ℹ️ <b>Status Update: Submission #{sub_id}</b>\n\n"
+            f"Your submission status has been reset back to <b>Pending Review</b>."
+        )
+        try:
+            await context.bot.send_message(chat_id=user_id, text=user_msg, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+
+        q_info = await db.get_queue_info(sub_id)
+        card_text = format_admin_submission_card(updated_sub, q_info)
+        kb = admin_submission_actions_keyboard(sub_id, "PENDING")
+        await query.edit_message_text(
+            f"↩️ <b>ACTION UNDONE: Submission #{sub_id} reverted back to PENDING!</b>\n\n" + card_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb
+        )
+        return
+
+    updated_sub = await db.update_submission_status(sub_id, new_status)
+    user_id = sub["user_id"]
+
     # Notify User based on status
     if new_status == "IN_REVIEW":
         user_msg = (
@@ -281,15 +310,29 @@ async def admin_change_status_callback(update: Update, context: ContextTypes.DEF
             pass
 
     elif new_status == "ACCEPTED":
+        tg_contact = SUPPORT_HANDLE if SUPPORT_HANDLE.startswith("@") else f"@{SUPPORT_HANDLE}"
         user_msg = (
-            f"✅ <b>Status Update</b>\n\n"
-            f"status changed to accepted your payment will be made soon\n\n"
-            f"🆔 <b>Submission ID:</b> #{sub_id}\n"
+            f"🎉 <b>Status Update: Submission Approved!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ <b>Your submission (ID: #{sub_id}) has been APPROVED!</b>\n\n"
             f"📧 <b>Email:</b> <code>{sub['email']}</code>\n"
-            f"📅 <b>Submitted Date:</b> {sub['created_at']}"
+            f"📅 <b>Submitted Date:</b> {sub['created_at']}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+            f"💰 <b>CLAIM YOUR PAYMENT:</b>\n"
+            f"Please message admin directly on Telegram to receive your payment for this account:\n\n"
+            f"👉 <b>Telegram ID:</b> {tg_contact}\n\n"
+            f"<i>Send a message to {tg_contact} quoting Submission ID #{sub_id} with your payment details to receive your payout!</i>"
         )
+        pay_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"💬 Message {tg_contact} for Payment", url=f"https://t.me/{tg_contact.lstrip('@')}")]
+        ])
         try:
-            await context.bot.send_message(chat_id=user_id, text=user_msg, parse_mode=ParseMode.HTML)
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=user_msg,
+                parse_mode=ParseMode.HTML,
+                reply_markup=pay_kb
+            )
         except Exception:
             pass
 
@@ -399,11 +442,12 @@ async def admin_resubmit_do_callback(update: Update, context: ContextTypes.DEFAU
 
     # Notify User
     user_msg = (
-        f"⚠️ <b>Status Update: Resubmission Allowed</b>\n\n"
-        f"Your submission (ID: #{sub_id}) status changed to: <b>Can Be Resubmitted</b>.\n"
+        f"⚠️ <b>Status Update: Resubmission Unlocked by Admin</b>\n\n"
+        f"Your submission (ID: #{sub_id}) was unlocked for resubmission.\n"
         f"📝 <b>Note:</b> {reason}\n"
         f"📅 <b>Original Submission Date:</b> {sub['created_at']}\n\n"
-        f"You can now resubmit your corrected details anytime by tapping <b>📝 Submit Information</b>."
+        f"<i>(Note: An 8-hour cooldown applies from the time of this approval before the account can be resubmitted.)</i>\n\n"
+        f"You can check eligibility or resubmit anytime via <b>⚖️ Submit Appeal / Resubmit</b>."
     )
     try:
         await context.bot.send_message(chat_id=sub["user_id"], text=user_msg, parse_mode=ParseMode.HTML)
@@ -506,14 +550,28 @@ async def admin_appeal_decision_callback(update: Update, context: ContextTypes.D
     if decision == "ACCEPT":
         await db.update_appeal_status(appeal_id, "APPROVED", "Accepted by admin")
         await db.update_submission_status(sub_id, "ACCEPTED", admin_notes="Accepted via appeal")
+        tg_contact = SUPPORT_HANDLE if SUPPORT_HANDLE.startswith("@") else f"@{SUPPORT_HANDLE}"
         user_msg = (
-            f"🎉 <b>Appeal Approved!</b>\n\n"
-            f"status changed to accepted your payment will be made soon\n\n"
-            f"🆔 <b>Submission ID:</b> #{sub_id}\n"
-            f"📧 <b>Email:</b> <code>{sub['email']}</code>"
+            f"🎉 <b>Appeal Approved!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ <b>Your submission (ID: #{sub_id}) has been APPROVED!</b>\n\n"
+            f"📧 <b>Email:</b> <code>{sub['email']}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+            f"💰 <b>CLAIM YOUR PAYMENT:</b>\n"
+            f"Please message admin directly on Telegram to receive your payment for this account:\n\n"
+            f"👉 <b>Telegram ID:</b> {tg_contact}\n\n"
+            f"<i>Send a message to {tg_contact} quoting Submission ID #{sub_id} with your payment details to receive your payout!</i>"
         )
+        pay_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"💬 Message {tg_contact} for Payment", url=f"https://t.me/{tg_contact.lstrip('@')}")]
+        ])
         try:
-            await context.bot.send_message(chat_id=user_id, text=user_msg, parse_mode=ParseMode.HTML)
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=user_msg,
+                parse_mode=ParseMode.HTML,
+                reply_markup=pay_kb
+            )
         except Exception:
             pass
 
@@ -531,7 +589,8 @@ async def admin_appeal_decision_callback(update: Update, context: ContextTypes.D
         user_msg = (
             f"⚠️ <b>Appeal Decision: Resubmission Granted</b>\n\n"
             f"Your appeal was reviewed and approved for resubmission.\n"
-            f"You can now submit corrected details using <b>📝 Submit Information</b>."
+            f"<i>(Note: An 8-hour cooldown applies from the time of this approval before the account can be resubmitted.)</i>\n\n"
+            f"You can track status or resubmit in <b>⚖️ Submit Appeal / Resubmit</b>."
         )
         try:
             await context.bot.send_message(chat_id=user_id, text=user_msg, parse_mode=ParseMode.HTML)
@@ -626,6 +685,61 @@ async def generate_txt_file(submissions: list) -> io.BytesIO:
     txt_bytes.name = "submissions_export.txt"
     return txt_bytes
 
+async def generate_batch_txt_file(submissions: list, count: int) -> io.BytesIO:
+    lines = [
+        "=" * 60,
+        f"MADCORN BOT - BATCH ACCOUNTS EXPORT ({len(submissions)} ACCOUNTS)",
+        f"Generated: {db.now_iso()}",
+        "=" * 60,
+        "",
+        "--- DETAILED ACCOUNTS LIST ---"
+    ]
+    for idx, s in enumerate(submissions, 1):
+        pass_val = s.get("pass_code") or s.get("full_name") or "N/A"
+        key_val = s.get("key_code") or s.get("unique_code") or "N/A"
+        resub_flag = "Yes" if s.get("is_resubmission") else "No"
+        lines.append(f"[{idx}] ID: #{s['id']}")
+        lines.append(f"  • Email:        {s['email']}")
+        lines.append(f"  • PASS:         {pass_val}")
+        lines.append(f"  • Key:          {key_val}")
+        lines.append(f"  • Status:       {s['status']}")
+        lines.append(f"  • Resubmission: {resub_flag}")
+        lines.append(f"  • Date:         {s['created_at']}")
+        lines.append("-" * 60)
+
+    lines.append("")
+    lines.append("--- QUICK FORMAT (EMAIL:PASS:KEY) ---")
+    for s in submissions:
+        pass_val = s.get("pass_code") or s.get("full_name") or ""
+        key_val = s.get("key_code") or s.get("unique_code") or ""
+        lines.append(f"{s['email']}:{pass_val}:{key_val}")
+
+    lines.append("=" * 60)
+
+    txt_content = "\n".join(lines)
+    txt_bytes = io.BytesIO(txt_content.encode("utf-8"))
+    txt_bytes.name = f"submissions_batch_{count}.txt"
+    return txt_bytes
+
+async def send_batch_txt(chat_id: int, bot, count: int):
+    submissions = await db.get_submissions_batch(limit=count, status="PENDING")
+    if not submissions:
+        await bot.send_message(chat_id=chat_id, text="⚠️ No accounts found in pool.")
+        return
+
+    txt_bytes = await generate_batch_txt_file(submissions, count)
+    await bot.send_document(
+        chat_id=chat_id,
+        document=InputFile(txt_bytes, filename=f"submissions_batch_{len(submissions)}.txt"),
+        caption=(
+            f"📄 <b>Custom Batch Export ({len(submissions)} Accounts)</b>\n"
+            f"• <b>Requested:</b> {count}\n"
+            f"• <b>Delivered:</b> {len(submissions)} accounts\n"
+            f"• <b>Format:</b> Detailed list + Quick Copy (EMAIL:PASS:KEY)"
+        ),
+        parse_mode=ParseMode.HTML
+    )
+
 async def admin_export_txt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("Generating TXT file...")
@@ -645,14 +759,67 @@ async def admin_export_txt_command(update: Update, context: ContextTypes.DEFAULT
     if not is_admin(update.effective_user.id):
         return
 
+    if context.args and context.args[0].isdigit():
+        count = int(context.args[0])
+        await send_batch_txt(update.effective_chat.id, context.bot, count)
+        return
+
+    # Default: export all submissions
     submissions = await db.get_all_submissions()
     txt_bytes = await generate_txt_file(submissions)
 
     await update.message.reply_document(
         document=InputFile(txt_bytes, filename="submissions_export.txt"),
-        caption=f"📄 <b>Submissions Data (TXT Format)</b>\nTotal records: {len(submissions)}",
+        caption=(
+            f"📄 <b>Submissions Data (TXT Format)</b>\nTotal records: {len(submissions)}\n\n"
+            f"<i>💡 Tip: To export a custom batch count, use: <code>/txt 5</code> or <code>/txt 10</code></i>"
+        ),
         parse_mode=ParseMode.HTML
     )
+
+WAIT_ADMIN_BATCH_COUNT = 303
+
+async def admin_req_txt_prompt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    stats = await db.get_admin_stats()
+    text = (
+        f"📄 <b>Request Custom Batch TXT Export</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"📦 <b>Pool Availability:</b>\n"
+        f"• ⏳ <b>Pending Accounts:</b> {stats['pending']}\n"
+        f"• 🆕 <b>New Accounts:</b> {stats['new_total']}\n"
+        f"• 🔄 <b>Resubmitted Accounts:</b> {stats['resubmitted_total']}\n"
+        f"• 📦 <b>Total Database Accounts:</b> {stats['total']}\n"
+        f"━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Please reply with the <b>number of accounts</b> you want in the TXT file (e.g. <code>5</code>, <code>10</code>, <code>25</code>):\n\n"
+        f"<i>(Or send ❌ Cancel to abort)</i>"
+    )
+    await query.message.reply_text(text, parse_mode=ParseMode.HTML)
+    return WAIT_ADMIN_BATCH_COUNT
+
+async def receive_admin_batch_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+
+    msg_text = update.message.text.strip()
+    if msg_text == "❌ Cancel":
+        await update.message.reply_text("Batch TXT export cancelled.")
+        return ConversationHandler.END
+
+    if not msg_text.isdigit() or int(msg_text) <= 0:
+        await update.message.reply_text(
+            "⚠️ Please enter a valid positive number (e.g. <code>5</code>, <code>10</code>) or send ❌ Cancel:",
+            parse_mode=ParseMode.HTML
+        )
+        return WAIT_ADMIN_BATCH_COUNT
+
+    count = int(msg_text)
+    await send_batch_txt(update.effective_chat.id, context.bot, count)
+    return ConversationHandler.END
 
 async def admin_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):

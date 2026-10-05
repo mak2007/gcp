@@ -58,7 +58,7 @@ async def init_db():
         """)
 
         # Backward-compatible columns for PASS, Key, and Resubmissions
-        for col in ["pass_code", "key_code", "resubmitted_at"]:
+        for col in ["pass_code", "key_code", "resubmitted_at", "resubmit_unlocked_at"]:
             try:
                 await db.execute(f"ALTER TABLE submissions ADD COLUMN {col} TEXT;")
             except Exception:
@@ -120,6 +120,32 @@ def check_8_hour_cooldown(timestamp_str: str) -> tuple[bool, int, int]:
     hours = int(diff // 3600)
     mins = int((diff % 3600) // 60)
     return (False, hours, mins)
+
+def check_resubmit_eligibility(submission: Dict[str, Any]) -> tuple[bool, str, int, int]:
+    """
+    Checks if a submission is eligible for resubmission.
+    Rules:
+    1. Must have status == 'CAN_RESUBMIT' (admin explicitly clicked 'Can Resubmit' or unlocked via appeal).
+    2. Must have elapsed >= 8 hours since admin unlocked (resubmit_unlocked_at).
+    
+    Returns: (can_resubmit: bool, reason: str, remaining_hours: int, remaining_mins: int)
+    """
+    status = submission.get("status")
+    if status == "ACCEPTED":
+        return (False, "ACCEPTED", 0, 0)
+
+    if status != "CAN_RESUBMIT":
+        return (False, "NOT_UNLOCKED", 0, 0)
+
+    unlocked_at = submission.get("resubmit_unlocked_at") or submission.get("updated_at")
+    if not unlocked_at:
+        return (False, "NOT_UNLOCKED", 0, 0)
+
+    can_resub, rem_h, rem_m = check_8_hour_cooldown(unlocked_at)
+    if not can_resub:
+        return (False, "COOLDOWN_ACTIVE", rem_h, rem_m)
+
+    return (True, "ELIGIBLE", 0, 0)
 
 async def get_submission_by_user(user_id: int) -> Optional[Dict[str, Any]]:
     """Gets the latest submission for a given Telegram user ID."""
@@ -203,16 +229,29 @@ async def update_submission_status(submission_id: int, new_status: str, admin_no
     ts = now_iso()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        if admin_notes is not None:
+        if new_status == "CAN_RESUBMIT":
+            # Setting CAN_RESUBMIT starts the 8-hour unlock countdown for the user
             await db.execute(
-                "UPDATE submissions SET status = ?, admin_notes = ?, updated_at = ? WHERE id = ?",
-                (new_status, admin_notes, ts, submission_id)
+                "UPDATE submissions SET status = ?, admin_notes = ?, resubmit_unlocked_at = ?, updated_at = ? WHERE id = ?",
+                (new_status, admin_notes, ts, ts, submission_id)
+            )
+        elif new_status == "PENDING":
+            # Undo action resets to PENDING
+            await db.execute(
+                "UPDATE submissions SET status = 'PENDING', admin_notes = ?, updated_at = ? WHERE id = ?",
+                (admin_notes, ts, submission_id)
             )
         else:
-            await db.execute(
-                "UPDATE submissions SET status = ?, updated_at = ? WHERE id = ?",
-                (new_status, ts, submission_id)
-            )
+            if admin_notes is not None:
+                await db.execute(
+                    "UPDATE submissions SET status = ?, admin_notes = ?, updated_at = ? WHERE id = ?",
+                    (new_status, admin_notes, ts, submission_id)
+                )
+            else:
+                await db.execute(
+                    "UPDATE submissions SET status = ?, updated_at = ? WHERE id = ?",
+                    (new_status, ts, submission_id)
+                )
         await db.commit()
 
         cursor = await db.execute("SELECT * FROM submissions WHERE id = ?", (submission_id,))
@@ -248,15 +287,21 @@ async def get_queue_info(submission_id: int) -> Dict[str, int]:
         }
 
 async def get_admin_stats() -> Dict[str, int]:
+    """Investor/Inventory style statistics breakdown."""
     async with aiosqlite.connect(DB_PATH) as db:
         stats = {
             "total": 0,
+            "new_total": 0,
+            "new_pending": 0,
+            "resubmitted_total": 0,
+            "resubmitted_pending": 0,
             "pending": 0,
             "in_review": 0,
             "accepted": 0,
             "disapproved": 0,
             "can_resubmit": 0,
-            "appeals_pending": 0
+            "appeals_pending": 0,
+            "resubmitted": 0
         }
         cursor = await db.execute("SELECT status, COUNT(*) FROM submissions GROUP BY status")
         rows = await cursor.fetchall()
@@ -273,13 +318,29 @@ async def get_admin_stats() -> Dict[str, int]:
             elif status == "CAN_RESUBMIT":
                 stats["can_resubmit"] = count
 
+        # New accounts inventory (is_resubmission = 0 or NULL)
+        cursor_new = await db.execute("SELECT COUNT(*) FROM submissions WHERE is_resubmission = 0 OR is_resubmission IS NULL")
+        row_new = await cursor_new.fetchone()
+        stats["new_total"] = row_new[0] if row_new else 0
+
+        cursor_new_pend = await db.execute("SELECT COUNT(*) FROM submissions WHERE (is_resubmission = 0 OR is_resubmission IS NULL) AND status = 'PENDING'")
+        row_new_pend = await cursor_new_pend.fetchone()
+        stats["new_pending"] = row_new_pend[0] if row_new_pend else 0
+
+        # Resubmitted accounts inventory
+        cursor_resub = await db.execute("SELECT COUNT(*) FROM submissions WHERE is_resubmission = 1")
+        resub_row = await cursor_resub.fetchone()
+        stats["resubmitted_total"] = resub_row[0] if resub_row else 0
+        stats["resubmitted"] = stats["resubmitted_total"]
+
+        cursor_resub_pend = await db.execute("SELECT COUNT(*) FROM submissions WHERE is_resubmission = 1 AND status = 'PENDING'")
+        resub_pend_row = await cursor_resub_pend.fetchone()
+        stats["resubmitted_pending"] = resub_pend_row[0] if resub_pend_row else 0
+
+        # Appeals pending
         cursor_app = await db.execute("SELECT COUNT(*) FROM appeals WHERE status = 'PENDING'")
         app_row = await cursor_app.fetchone()
         stats["appeals_pending"] = app_row[0] if app_row else 0
-
-        cursor_resub = await db.execute("SELECT COUNT(*) FROM submissions WHERE is_resubmission = 1")
-        resub_row = await cursor_resub.fetchone()
-        stats["resubmitted"] = resub_row[0] if resub_row else 0
 
         return stats
 
@@ -289,6 +350,48 @@ async def get_submissions_by_status(status: str, limit: int = 10, offset: int = 
         cursor = await db.execute(
             "SELECT * FROM submissions WHERE status = ? ORDER BY id ASC LIMIT ? OFFSET ?",
             (status, limit, offset)
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+async def get_submissions_batch(limit: int = 5, status: Optional[str] = "PENDING") -> List[Dict[str, Any]]:
+    """Gets up to 'limit' submissions from pool (prioritizing 'status' if specified)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if status:
+            cursor = await db.execute(
+                "SELECT * FROM submissions WHERE status = ? ORDER BY id ASC LIMIT ?",
+                (status, limit)
+            )
+            rows = await cursor.fetchall()
+            if rows:
+                return [dict(r) for r in rows]
+        # Fallback to any submissions if not enough of the given status
+        cursor = await db.execute(
+            "SELECT * FROM submissions ORDER BY id ASC LIMIT ?",
+            (limit,)
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+async def get_user_eligible_resubmissions(user_id: int) -> List[Dict[str, Any]]:
+    """Gets submissions for this user that were unlocked by admin (status == 'CAN_RESUBMIT')."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM submissions WHERE user_id = ? AND status = 'CAN_RESUBMIT' ORDER BY id DESC",
+            (user_id,)
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+async def get_user_disapproved_submissions(user_id: int) -> List[Dict[str, Any]]:
+    """Gets submissions for this user that are DISAPPROVED (eligible for appeal)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM submissions WHERE user_id = ? AND status = 'DISAPPROVED' ORDER BY id DESC",
+            (user_id,)
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]

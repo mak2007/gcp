@@ -34,6 +34,10 @@ def admin_submission_actions_keyboard(submission_id: int, current_status: str) -
     if row2:
         buttons.append(row2)
 
+    # Undo / Revert to Pending button
+    if current_status != "PENDING":
+        buttons.append([InlineKeyboardButton("↩️ Undo / Revert to Pending", callback_data=f"adm_st:{submission_id}:PENDING")])
+
     buttons.append([InlineKeyboardButton("🔄 Refresh Details", callback_data=f"adm_view:{submission_id}")])
     return InlineKeyboardMarkup(buttons)
 
@@ -48,14 +52,15 @@ def admin_dashboard_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("⚖️ Pending Appeals", callback_data="adm_appeals:0")
         ],
         [
-            InlineKeyboardButton("📊 Overall Stats", callback_data="adm_stats"),
+            InlineKeyboardButton("📊 Inventory / Stock Stats", callback_data="adm_stats"),
             InlineKeyboardButton("📢 Make Announcement", callback_data="adm_broadcast_prompt")
         ],
         [
             InlineKeyboardButton("📥 Export CSV", callback_data="adm_export_csv"),
-            InlineKeyboardButton("📄 Export TXT", callback_data="adm_export_txt")
+            InlineKeyboardButton("📄 Export All TXT", callback_data="adm_export_txt")
         ],
         [
+            InlineKeyboardButton("📄 Request Custom TXT Batch", callback_data="adm_req_txt_prompt"),
             InlineKeyboardButton("🔎 Search Submission", callback_data="adm_search_prompt")
         ]
     ])

@@ -178,14 +178,73 @@ async def run_tests():
     can_resub3, rem_h3, rem_m3 = db.check_8_hour_cooldown(time_passed)
     assert can_resub3, "Should be able to resubmit after 8 hours"
     assert rem_h3 == 0 and rem_m3 == 0
-
     print("✅ 8-hour cooldown calculation logic passed.")
+
+    # 11. Test Admin-Unlock requirement & Post-Unlock Cooldown
+    sub_test_unlock = await db.create_submission(1234, "tester", "locked@example.com", "PASS", "KEY")
+    sub_obj = await db.get_submission_by_id(sub_test_unlock)
+    can_res, reason, _, _ = db.check_resubmit_eligibility(sub_obj)
+    assert not can_res and reason == "NOT_UNLOCKED", "Resubmission must be blocked if admin did not unlock"
+
+    # Admin clicks 'Can Resubmit' now
+    await db.update_submission_status(sub_test_unlock, "CAN_RESUBMIT", "Fix your key")
+    sub_obj_unlocked = await db.get_submission_by_id(sub_test_unlock)
+    assert sub_obj_unlocked["resubmit_unlocked_at"] is not None
+    # Just unlocked -> cooldown is active
+    can_res2, reason2, h2, m2 = db.check_resubmit_eligibility(sub_obj_unlocked)
+    assert not can_res2 and reason2 == "COOLDOWN_ACTIVE", "Cooldown must be active right after admin clicks"
+
+    # Simulate 8 hours passed since admin unlocked
+    fake_unlock_time = (now_utc - timedelta(hours=8, minutes=10)).strftime("%Y-%m-%d %H:%M:%S UTC")
+    sub_obj_unlocked["resubmit_unlocked_at"] = fake_unlock_time
+    can_res3, reason3, _, _ = db.check_resubmit_eligibility(sub_obj_unlocked)
+    assert can_res3 and reason3 == "ELIGIBLE", "Must be eligible once 8 hours have passed since admin unlocked"
+    print("✅ Admin-unlock requirement and 8-hour post-unlock cooldown verified.")
+
+    # 12. Test Undo Action (Revert to PENDING)
+    sub_undo_id = await db.create_submission(5678, "undo_user", "undo@example.com", "P", "K")
+    # Admin mistakenly moves to IN_REVIEW
+    await db.update_submission_status(sub_undo_id, "IN_REVIEW")
+    chk = await db.get_submission_by_id(sub_undo_id)
+    assert chk["status"] == "IN_REVIEW"
+
+    # Admin clicks Undo -> reverts to PENDING
+    await db.update_submission_status(sub_undo_id, "PENDING")
+    chk_undone = await db.get_submission_by_id(sub_undo_id)
+    assert chk_undone["status"] == "PENDING"
+
+    # Admin mistakenly moves to ACCEPTED
+    await db.update_submission_status(sub_undo_id, "ACCEPTED")
+    chk2 = await db.get_submission_by_id(sub_undo_id)
+    assert chk2["status"] == "ACCEPTED"
+
+    # Admin clicks Undo -> reverts to PENDING
+    await db.update_submission_status(sub_undo_id, "PENDING")
+    chk_undone2 = await db.get_submission_by_id(sub_undo_id)
+    assert chk_undone2["status"] == "PENDING"
+    print("✅ Admin Undo action (revert to PENDING) verified.")
+
+    # 13. Test Inventory Statistics Breakdown
+    stats_inv = await db.get_admin_stats()
+    assert "new_total" in stats_inv
+    assert "new_pending" in stats_inv
+    assert "resubmitted_total" in stats_inv
+    assert "resubmitted_pending" in stats_inv
+    assert stats_inv["new_total"] > 0
+    print(f"✅ Investor/Inventory stock stats verified: New={stats_inv['new_total']} (Pending={stats_inv['new_pending']}), Resubmitted={stats_inv['resubmitted_total']}")
+
+    # 14. Test Custom TXT Batch Query
+    batch_5 = await db.get_submissions_batch(limit=5, status="PENDING")
+    assert len(batch_5) == 5, f"Expected 5 submissions in batch, got {len(batch_5)}"
+    batch_3 = await db.get_submissions_batch(limit=3, status="PENDING")
+    assert len(batch_3) == 3
+    print("✅ Custom batch pool selection verified.")
 
     # Cleanup test db
     if os.path.exists("test_bot.sqlite"):
         os.remove("test_bot.sqlite")
 
-    print("\n🎉 ALL 10 TEST SUITES PASSED PERFECTLY!")
+    print("\n🎉 ALL 14 TEST SUITES PASSED PERFECTLY!")
 
 if __name__ == "__main__":
     asyncio.run(run_tests())
