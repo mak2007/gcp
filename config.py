@@ -1,19 +1,37 @@
 import os
+import sys
 from typing import List
 from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
+def get_env_flexible(key_name: str, default: str = "") -> str:
+    # Try exact match
+    val = os.getenv(key_name)
+    if val:
+        return val.strip().strip("'\"")
+    # Try lowercase, uppercase, and common variants
+    for k, v in os.environ.items():
+        if k.upper() == key_name.upper():
+            return v.strip().strip("'\"")
+    return default
 
-# Admin IDs separated by comma in .env: e.g. "12345678,87654321"
-raw_admin_ids = os.getenv("ADMIN_IDS", "").strip()
+BOT_TOKEN: str = (
+    get_env_flexible("BOT_TOKEN") 
+    or get_env_flexible("TELEGRAM_BOT_TOKEN") 
+    or get_env_flexible("TOKEN") 
+    or get_env_flexible("TG_BOT_TOKEN")
+)
+
+raw_admin_ids = (
+    get_env_flexible("ADMIN_IDS") 
+    or get_env_flexible("ADMIN_ID") 
+    or get_env_flexible("ADMINS")
+)
 ADMIN_IDS: List[int] = [
     int(x.strip()) for x in raw_admin_ids.split(",") if x.strip().isdigit()
 ]
 
-# Support username or contact link, e.g. "@YourSupportUser" or "https://t.me/YourSupportUser"
-SUPPORT_HANDLE: str = os.getenv("SUPPORT_HANDLE", "@AdminSupport").strip()
+SUPPORT_HANDLE: str = get_env_flexible("SUPPORT_HANDLE", "@AdminSupport")
+DB_PATH: str = get_env_flexible("DB_PATH", "bot_database.sqlite")
 
-# Database path
-DB_PATH: str = os.getenv("DB_PATH", "bot_database.sqlite").strip()

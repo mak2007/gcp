@@ -86,11 +86,13 @@ async def post_init(application):
         logger.warning("No ADMIN_IDS configured in .env! Admin commands won't be accessible.")
 
 def main():
+    import os
     if not BOT_TOKEN:
         print("\n" + "=" * 60)
         print("❌ ERROR: BOT_TOKEN is not configured!")
-        print("Please create or edit the .env file and set your BOT_TOKEN.")
-        print("Example: BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz")
+        print("Available environment variable keys found in container:")
+        print([k for k in os.environ.keys() if not k.startswith("RAILWAY_SYSTEM_")])
+        print("Please ensure BOT_TOKEN is saved in Railway Variables.")
         print("=" * 60 + "\n")
         sys.exit(1)
 
