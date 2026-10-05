@@ -5,9 +5,10 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 from config import ADMIN_IDS, SUPPORT_HANDLE
 import database as db
-from keyboards import admin_submission_actions_keyboard, admin_dashboard_keyboard
+from keyboards import admin_submission_actions_keyboard, admin_dashboard_keyboard, admin_settings_keyboard, main_menu_keyboard
 
 WAIT_ADMIN_SEARCH = 301
+WAIT_ADMIN_SETTING_VALUE = 304
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -310,7 +311,9 @@ async def admin_change_status_callback(update: Update, context: ContextTypes.DEF
             pass
 
     elif new_status == "ACCEPTED":
-        tg_contact = SUPPORT_HANDLE if SUPPORT_HANDLE.startswith("@") else f"@{SUPPORT_HANDLE}"
+        current_handle = await db.get_support_handle()
+        tg_contact = current_handle if current_handle.startswith("@") else f"@{current_handle}"
+        clean_handle = tg_contact.lstrip("@")
         user_msg = (
             f"🎉 <b>Status Update: Submission Approved!</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
@@ -324,7 +327,7 @@ async def admin_change_status_callback(update: Update, context: ContextTypes.DEF
             f"<i>Send a message to {tg_contact} quoting Submission ID #{sub_id} with your payment details to receive your payout!</i>"
         )
         pay_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"💬 Message {tg_contact} for Payment", url=f"https://t.me/{tg_contact.lstrip('@')}")]
+            [InlineKeyboardButton(f"💬 Message {tg_contact} for Payment", url=f"https://t.me/{clean_handle}")]
         ])
         try:
             await context.bot.send_message(
@@ -550,7 +553,9 @@ async def admin_appeal_decision_callback(update: Update, context: ContextTypes.D
     if decision == "ACCEPT":
         await db.update_appeal_status(appeal_id, "APPROVED", "Accepted by admin")
         await db.update_submission_status(sub_id, "ACCEPTED", admin_notes="Accepted via appeal")
-        tg_contact = SUPPORT_HANDLE if SUPPORT_HANDLE.startswith("@") else f"@{SUPPORT_HANDLE}"
+        current_handle = await db.get_support_handle()
+        tg_contact = current_handle if current_handle.startswith("@") else f"@{current_handle}"
+        clean_handle = tg_contact.lstrip("@")
         user_msg = (
             f"🎉 <b>Appeal Approved!</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
@@ -563,7 +568,7 @@ async def admin_appeal_decision_callback(update: Update, context: ContextTypes.D
             f"<i>Send a message to {tg_contact} quoting Submission ID #{sub_id} with your payment details to receive your payout!</i>"
         )
         pay_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"💬 Message {tg_contact} for Payment", url=f"https://t.me/{tg_contact.lstrip('@')}")]
+            [InlineKeyboardButton(f"💬 Message {tg_contact} for Payment", url=f"https://t.me/{clean_handle}")]
         ])
         try:
             await context.bot.send_message(
@@ -995,4 +1000,150 @@ async def admin_quick_broadcast_command(update: Update, context: ContextTypes.DE
         f"• ⚠️ <b>Failed / Blocked:</b> {res['failed']}",
         parse_mode=ParseMode.HTML
     )
+
+async def admin_settings_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    channel_url = await db.get_channel_url()
+    video_url = await db.get_video_url()
+    support_handle = await db.get_support_handle()
+
+    text = (
+        "⚙️ <b>Bot Links & Telegram Handles Settings</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"📢 <b>Channel Link:</b>\n👉 <code>{channel_url}</code>\n\n"
+        f"🎥 <b>Tutorial Video Link:</b>\n👉 <code>{video_url}</code>\n\n"
+        f"💬 <b>Support & Payout Handle:</b>\n👉 <code>{support_handle}</code>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<i>Select which link or handle you want to update:</i>"
+    )
+
+    await query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_settings_keyboard(),
+        disable_web_page_preview=True
+    )
+
+async def admin_set_prompt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return ConversationHandler.END
+
+    setting_key = query.data.split(":")[1]
+    context.user_data["admin_setting_target"] = setting_key
+
+    prompts = {
+        "channel_url": "📢 <b>Update Channel Link</b>\n\nPlease enter the new Telegram channel link (e.g. <code>https://t.me/yourchannel</code>)\n\n<i>Or send ❌ Cancel to abort:</i>",
+        "video_url": "🎥 <b>Update Tutorial Video Link</b>\n\nPlease enter the new video URL (e.g. <code>https://t.me/yourvideo</code> or YouTube link)\n\n<i>Or send ❌ Cancel to abort:</i>",
+        "support_handle": "💬 <b>Update Support / Payout Telegram Handle</b>\n\nPlease enter the Telegram username (e.g. <code>@MyAdminHandle</code>)\n\n<i>Or send ❌ Cancel to abort:</i>"
+    }
+
+    msg = prompts.get(setting_key, "Please enter the new value:\n\n<i>Or send ❌ Cancel to abort:</i>")
+    await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
+    return WAIT_ADMIN_SETTING_VALUE
+
+async def receive_admin_setting_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+
+    raw_val = update.message.text.strip()
+    if raw_val in ["❌ Cancel", "/cancel"]:
+        await update.message.reply_text("❌ Update cancelled.")
+        return ConversationHandler.END
+
+    target_key = context.user_data.get("admin_setting_target")
+    if not target_key:
+        await update.message.reply_text("⚠️ No active setting update found.")
+        return ConversationHandler.END
+
+    if target_key == "support_handle":
+        val = raw_val if raw_val.startswith("@") else f"@{raw_val}"
+    else:
+        val = raw_val
+
+    await db.set_setting(target_key, val)
+    context.user_data.pop("admin_setting_target", None)
+
+    names = {
+        "channel_url": "Channel Link",
+        "video_url": "Tutorial Video Link",
+        "support_handle": "Support / Payout Handle"
+    }
+    label = names.get(target_key, target_key)
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚙️ Back to Settings", callback_data="adm_settings_menu")],
+        [InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]
+    ])
+
+    await update.message.reply_text(
+        f"✅ <b>{label} Updated Successfully!</b>\n\n"
+        f"New value:\n👉 <code>{val}</code>\n\n"
+        f"<i>This update takes effect immediately for all users across the bot!</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+        disable_web_page_preview=True
+    )
+    return ConversationHandler.END
+
+async def admin_setchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        curr = await db.get_channel_url()
+        await update.message.reply_text(
+            f"📢 <b>Current Channel Link:</b> <code>{curr}</code>\n\n"
+            f"<b>Usage:</b> <code>/setchannel https://t.me/yourchannel</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    new_url = context.args[0].strip()
+    await db.set_setting("channel_url", new_url)
+    await update.message.reply_text(
+        f"✅ Channel link updated to: <code>{new_url}</code>",
+        parse_mode=ParseMode.HTML
+    )
+
+async def admin_setvideo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        curr = await db.get_video_url()
+        await update.message.reply_text(
+            f"🎥 <b>Current Video Link:</b> <code>{curr}</code>\n\n"
+            f"<b>Usage:</b> <code>/setvideo https://t.me/yourvideo</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    new_url = context.args[0].strip()
+    await db.set_setting("video_url", new_url)
+    await update.message.reply_text(
+        f"✅ Video link updated to: <code>{new_url}</code>",
+        parse_mode=ParseMode.HTML
+    )
+
+async def admin_setsupport_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        curr = await db.get_support_handle()
+        await update.message.reply_text(
+            f"💬 <b>Current Support Handle:</b> <code>{curr}</code>\n\n"
+            f"<b>Usage:</b> <code>/setsupport @YourHandle</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    raw_handle = context.args[0].strip()
+    new_handle = raw_handle if raw_handle.startswith("@") else f"@{raw_handle}"
+    await db.set_setting("support_handle", new_handle)
+    await update.message.reply_text(
+        f"✅ Support / Payout handle updated to: <code>{new_handle}</code>",
+        parse_mode=ParseMode.HTML
+    )
+
 

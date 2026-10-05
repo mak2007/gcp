@@ -57,6 +57,13 @@ async def init_db():
             );
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bot_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+        """)
+
         # Backward-compatible columns for PASS, Key, and Resubmissions
         for col in ["pass_code", "key_code", "resubmitted_at", "resubmit_unlocked_at"]:
             try:
@@ -70,6 +77,32 @@ async def init_db():
             pass
 
         await db.commit()
+
+async def get_setting(key: str, default: str = "") -> str:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT value FROM bot_settings WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        return row[0] if row else default
+
+async def set_setting(key: str, value: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)", (key, value.strip()))
+        await db.commit()
+
+async def get_channel_url() -> str:
+    from config import REQUIRED_CHANNEL
+    val = await get_setting("channel_url")
+    return val if val else REQUIRED_CHANNEL
+
+async def get_video_url() -> str:
+    from config import TUTORIAL_VIDEO_URL
+    val = await get_setting("video_url")
+    return val if val else TUTORIAL_VIDEO_URL
+
+async def get_support_handle() -> str:
+    from config import SUPPORT_HANDLE
+    val = await get_setting("support_handle")
+    return val if val else SUPPORT_HANDLE
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")

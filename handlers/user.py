@@ -57,16 +57,19 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Register user in database
     await db.register_user(user.id, user.username, user.first_name)
 
+    channel_url = await db.get_channel_url()
+    video_url = await db.get_video_url()
+
     welcome_text = (
         f"👋 <b>Welcome to Madcorn Bot!</b>\n\n"
-        f"🎥 <b>Tutorial Video:</b> <a href=\"{TUTORIAL_VIDEO_URL}\">Watch Here</a>\n\n"
+        f"🎥 <b>Tutorial Video:</b> <a href=\"{video_url}\">Watch Here</a>\n\n"
         f"📢 <b>Please join our updates channel first:</b>\n"
-        f"👉 <a href=\"{REQUIRED_CHANNEL}\">Click to Join Channel</a>"
+        f"👉 <a href=\"{channel_url}\">Click to Join Channel</a>"
     )
 
     join_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Join Channel", url=REQUIRED_CHANNEL)],
-        [InlineKeyboardButton("🎥 Tutorial Video", url=TUTORIAL_VIDEO_URL)],
+        [InlineKeyboardButton("📢 Join Channel", url=channel_url)],
+        [InlineKeyboardButton("🎥 Tutorial Video", url=video_url)],
         [InlineKeyboardButton("✅ I Have Joined / Continue", callback_data="usr_continue_main")]
     ])
 
@@ -114,9 +117,10 @@ async def refresh_status_callback(update: Update, context: ContextTypes.DEFAULT_
         pass
 
 async def support_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    support_handle = await db.get_support_handle()
     support_text = (
         f"💬 <b>Support</b>\n\n"
-        f"Contact Admin: {SUPPORT_HANDLE}\n\n"
+        f"Contact Admin: {support_handle}\n\n"
         f"Or type your question below (or send ❌ Cancel):"
     )
     await update.message.reply_text(

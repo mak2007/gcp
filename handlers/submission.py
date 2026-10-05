@@ -13,10 +13,13 @@ WAIT_EMAIL, WAIT_PASS, WAIT_KEY, WAIT_CONFIRM = range(4)
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
-def key_help_keyboard() -> InlineKeyboardMarkup:
+def key_help_keyboard(support_handle: str = "@Admin", video_url: str = "") -> InlineKeyboardMarkup:
+    handle_clean = support_handle.lstrip("@")
+    tg_url = f"https://t.me/{handle_clean}"
+    vid_url = video_url if video_url else tg_url
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🆘 Need Help with Key? Contact @LALAJIIIIIIIIII", url="https://t.me/LALAJIIIIIIIIII")],
-        [InlineKeyboardButton("🎥 Video Tutorial (Coming Soon)", url="https://t.me/LALAJIIIIIIIIII")]
+        [InlineKeyboardButton(f"🆘 Need Help with Key? Contact {support_handle}", url=tg_url)],
+        [InlineKeyboardButton("🎥 Video Tutorial", url=vid_url)]
     ])
 
 def review_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -152,14 +155,16 @@ async def receive_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["sub_pass"] = pass_text
 
-    # Step 3: Ask for Key + Help Button (@LALAJIIIIIIIIII) + Video tutorial placeholder
+    # Step 3: Ask for Key + Help Button + Video tutorial
+    support_h = await db.get_support_handle()
+    video_u = await db.get_video_url()
     await update.message.reply_text(
         f"✅ PASS recorded!\n\n"
         f"🔑 <b>Step 3 of 3: Enter Key</b>\n"
         f"Please enter your <b>Key</b>:\n\n"
         f"<i>💡 Need help with finding your Key? Tap the Help button below:</i>",
         parse_mode=ParseMode.HTML,
-        reply_markup=key_help_keyboard()
+        reply_markup=key_help_keyboard(support_h, video_u)
     )
     return WAIT_KEY
 
@@ -173,9 +178,11 @@ async def receive_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     if len(key_text) < 1 or len(key_text) > 100:
+        support_h = await db.get_support_handle()
+        video_u = await db.get_video_url()
         await update.message.reply_text(
             "⚠️ Please enter a valid Key:",
-            reply_markup=key_help_keyboard()
+            reply_markup=key_help_keyboard(support_h, video_u)
         )
         return WAIT_KEY
 

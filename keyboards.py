@@ -62,7 +62,18 @@ def admin_dashboard_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("📄 Request Custom TXT Batch", callback_data="adm_req_txt_prompt"),
             InlineKeyboardButton("🔎 Search Submission", callback_data="adm_search_prompt")
+        ],
+        [
+            InlineKeyboardButton("🔗 Bot Links & Settings", callback_data="adm_settings_menu")
         ]
+    ])
+
+def admin_settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Change Channel Link", callback_data="adm_set:channel_url")],
+        [InlineKeyboardButton("🎥 Change Tutorial Video Link", callback_data="adm_set:video_url")],
+        [InlineKeyboardButton("💬 Change Admin / Payout TG Handle", callback_data="adm_set:support_handle")],
+        [InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]
     ])
 
 def appeal_admin_keyboard(appeal_id: int) -> InlineKeyboardMarkup:

@@ -240,11 +240,30 @@ async def run_tests():
     assert len(batch_3) == 3
     print("✅ Custom batch pool selection verified.")
 
+    # 15. Test Dynamic Bot Settings (Channel, Video, Support Handle)
+    # Default fallbacks
+    init_channel = await db.get_channel_url()
+    init_video = await db.get_video_url()
+    init_support = await db.get_support_handle()
+    assert init_channel is not None and len(init_channel) > 0
+    assert init_video is not None and len(init_video) > 0
+    assert init_support is not None and len(init_support) > 0
+
+    # Live update via set_setting
+    await db.set_setting("channel_url", "https://t.me/MyNewChannel123")
+    await db.set_setting("video_url", "https://t.me/MyTutorialVideo")
+    await db.set_setting("support_handle", "@MySupportAdmin")
+
+    assert await db.get_channel_url() == "https://t.me/MyNewChannel123"
+    assert await db.get_video_url() == "https://t.me/MyTutorialVideo"
+    assert await db.get_support_handle() == "@MySupportAdmin"
+    print("✅ Dynamic Bot Settings (Channel, Video, Support Handle) persistence and live retrieval verified.")
+
     # Cleanup test db
     if os.path.exists("test_bot.sqlite"):
         os.remove("test_bot.sqlite")
 
-    print("\n🎉 ALL 14 TEST SUITES PASSED PERFECTLY!")
+    print("\n🎉 ALL 15 TEST SUITES PASSED PERFECTLY!")
 
 if __name__ == "__main__":
     asyncio.run(run_tests())

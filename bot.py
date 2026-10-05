@@ -76,7 +76,14 @@ from handlers.admin import (
     WAIT_ADMIN_BROADCAST,
     admin_req_txt_prompt_callback,
     receive_admin_batch_count,
-    WAIT_ADMIN_BATCH_COUNT
+    WAIT_ADMIN_BATCH_COUNT,
+    admin_settings_menu_callback,
+    admin_set_prompt_callback,
+    receive_admin_setting_value,
+    admin_setchannel_command,
+    admin_setvideo_command,
+    admin_setsupport_command,
+    WAIT_ADMIN_SETTING_VALUE
 )
 
 # Logging configuration
@@ -207,7 +214,23 @@ def main():
     )
     app.add_handler(batch_txt_conv)
 
-    # 6. Standard Commands & Buttons
+    # 6. Admin Settings Conversation Handler
+    settings_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(admin_set_prompt_callback, pattern=r"^adm_set:")
+        ],
+        states={
+            WAIT_ADMIN_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_admin_setting_value)],
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
+            CommandHandler("cancel", cancel_conversation)
+        ],
+        allow_reentry=True
+    )
+    app.add_handler(settings_conv)
+
+    # 7. Standard Commands & Buttons
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("status", check_status_handler))
     app.add_handler(MessageHandler(filters.Regex("^📊 Check Status & Queue$"), check_status_handler))
@@ -217,18 +240,22 @@ def main():
     app.add_handler(CallbackQueryHandler(refresh_status_callback, pattern=r"^usr_refresh_status$"))
     app.add_handler(CallbackQueryHandler(cooldown_alert_callback, pattern=r"^usr_cooldown_alert:\d+$"))
 
-    # 6. Admin Commands & Handlers
+    # 8. Admin Commands & Handlers
     app.add_handler(CommandHandler("admin", admin_dashboard_command))
     app.add_handler(CommandHandler("search", admin_search_command))
     app.add_handler(CommandHandler("broadcast", admin_quick_broadcast_command))
     app.add_handler(CommandHandler("announce", admin_quick_broadcast_command))
     app.add_handler(CommandHandler("txt", admin_export_txt_command))
     app.add_handler(CommandHandler("export", admin_export_txt_command))
+    app.add_handler(CommandHandler("setchannel", admin_setchannel_command))
+    app.add_handler(CommandHandler("setvideo", admin_setvideo_command))
+    app.add_handler(CommandHandler("setsupport", admin_setsupport_command))
     app.add_handler(MessageHandler(filters.Regex("^⚙️ Admin Dashboard$"), admin_dashboard_command))
 
     # Admin Callback Queries
     app.add_handler(CallbackQueryHandler(admin_dashboard_command, pattern=r"^adm_dashboard_nav$"))
     app.add_handler(CallbackQueryHandler(admin_stats_callback, pattern=r"^adm_stats$"))
+    app.add_handler(CallbackQueryHandler(admin_settings_menu_callback, pattern=r"^adm_settings_menu$"))
     app.add_handler(CallbackQueryHandler(admin_list_submissions_callback, pattern=r"^adm_list:"))
     app.add_handler(CallbackQueryHandler(admin_list_resubmitted_callback, pattern=r"^adm_resub_list:"))
     app.add_handler(CallbackQueryHandler(admin_view_submission_callback, pattern=r"^adm_view:"))
