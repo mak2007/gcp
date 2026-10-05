@@ -1,0 +1,702 @@
+import io
+import csv
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes, ConversationHandler
+from config import ADMIN_IDS
+import database as db
+from keyboards import admin_submission_actions_keyboard, admin_dashboard_keyboard
+
+WAIT_ADMIN_SEARCH = 301
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
+def format_admin_submission_card(sub: dict, queue_info: dict = None) -> str:
+    status_emoji_map = {
+        "PENDING": "⏳ PENDING",
+        "IN_REVIEW": "🔍 IN REVIEW",
+        "ACCEPTED": "✅ ACCEPTED",
+        "DISAPPROVED": "❌ DISAPPROVED",
+        "CAN_RESUBMIT": "🔄 CAN RESUBMIT"
+    }
+    status_str = status_emoji_map.get(sub["status"], sub["status"])
+    text = (
+        f"📋 <b>Submission Details #{sub['id']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Name:</b> {sub['full_name']}\n"
+        f"💬 <b>Telegram:</b> @{sub.get('username') or 'None'} (ID: <code>{sub['user_id']}</code>)\n"
+        f"📧 <b>Email:</b> <code>{sub['email']}</code>\n"
+        f"🔑 <b>Unique Code:</b> <code>{sub['unique_code']}</code>\n"
+        f"📅 <b>Submitted Date:</b> {sub['created_at']}\n"
+        f"📊 <b>Status:</b> <b>{status_str}</b>\n"
+    )
+    if sub.get("admin_notes"):
+        text += f"📝 <b>Admin Notes:</b> {sub['admin_notes']}\n"
+
+    if sub["status"] == "PENDING" and queue_info:
+        text += (
+            f"🔢 <b>Queue Pos:</b> #{queue_info['position']} "
+            f"({queue_info['ahead_count']} ahead | {queue_info['total_pending']} total)\n"
+        )
+    text += "━━━━━━━━━━━━━━━━━━━"
+    return text
+
+async def admin_dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        if update.callback_query:
+            await update.callback_query.answer("⛔ Access Denied.")
+        else:
+            await update.message.reply_text("⛔ Access Denied. Admin only.")
+        return
+
+    stats = await db.get_admin_stats()
+    text = (
+        f"⚙️ <b>Admin Control Dashboard</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 <b>Submissions Overview:</b>\n"
+        f"• <b>Total Submissions:</b> {stats['total']}\n"
+        f"• ⏳ <b>Pending in Queue:</b> {stats['pending']}\n"
+        f"• 🔍 <b>In Review:</b> {stats['in_review']}\n"
+        f"• ✅ <b>Accepted (Paid/Queued):</b> {stats['accepted']}\n"
+        f"• ❌ <b>Disapproved:</b> {stats['disapproved']}\n"
+        f"• 🔄 <b>Can Be Resubmitted:</b> {stats['can_resubmit']}\n"
+        f"• ⚖️ <b>Pending Appeals:</b> {stats['appeals_pending']}\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"Select an action below:"
+    )
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_dashboard_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_dashboard_keyboard()
+        )
+
+async def admin_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    stats = await db.get_admin_stats()
+    text = (
+        f"⚙️ <b>Admin Live Statistics</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"• <b>Total Submissions:</b> {stats['total']}\n"
+        f"• ⏳ <b>Pending in Queue:</b> {stats['pending']}\n"
+        f"• 🔍 <b>In Review:</b> {stats['in_review']}\n"
+        f"• ✅ <b>Accepted:</b> {stats['accepted']}\n"
+        f"• ❌ <b>Disapproved:</b> {stats['disapproved']}\n"
+        f"• 🔄 <b>Can Be Resubmitted:</b> {stats['can_resubmit']}\n"
+        f"• ⚖️ <b>Pending Appeals:</b> {stats['appeals_pending']}\n"
+        f"━━━━━━━━━━━━━━━━━━━"
+    )
+    await query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_dashboard_keyboard()
+    )
+
+async def admin_list_submissions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    # Callback format: adm_list:<STATUS>:<OFFSET>
+    parts = query.data.split(":")
+    status = parts[1]
+    offset = int(parts[2])
+    limit = 5
+
+    items = await db.get_submissions_by_status(status, limit=limit, offset=offset)
+
+    if not items:
+        await query.edit_message_text(
+            f"ℹ️ No submissions found under <b>{status}</b> (page {offset // limit + 1}).",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")
+            ]])
+        )
+        return
+
+    text = f"📋 <b>Submissions: {status}</b> (Page {offset // limit + 1})\n━━━━━━━━━━━━━━━━━━━\n"
+    keyboard_buttons = []
+
+    for item in items:
+        text += (
+            f"• <b>#{item['id']}</b> | {item['full_name']} | <code>{item['email']}</code>\n"
+            f"  Code: <code>{item['unique_code']}</code> | Date: {item['created_at']}\n\n"
+        )
+        keyboard_buttons.append([
+            InlineKeyboardButton(f"👉 Manage #{item['id']} ({item['full_name'][:12]})", callback_data=f"adm_view:{item['id']}")
+        ])
+
+    nav_row = []
+    if offset > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"adm_list:{status}:{max(0, offset - limit)}"))
+    if len(items) == limit:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"adm_list:{status}:{offset + limit}"))
+    if nav_row:
+        keyboard_buttons.append(nav_row)
+
+    keyboard_buttons.append([InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")])
+
+    await query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard_buttons)
+    )
+
+async def admin_view_submission_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    sub_id = int(query.data.split(":")[1])
+    sub = await db.get_submission_by_id(sub_id)
+    if not sub:
+        await query.edit_message_text("⚠️ Submission not found.")
+        return
+
+    q_info = await db.get_queue_info(sub_id) if sub["status"] == "PENDING" else None
+    card_text = format_admin_submission_card(sub, q_info)
+    kb = admin_submission_actions_keyboard(sub_id, sub["status"])
+
+    await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+async def admin_change_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    # Callback format: adm_st:<SUB_ID>:<NEW_STATUS>
+    parts = query.data.split(":")
+    sub_id = int(parts[1])
+    new_status = parts[2]
+
+    sub = await db.get_submission_by_id(sub_id)
+    if not sub:
+        await query.edit_message_text("⚠️ Submission not found.")
+        return
+
+    updated_sub = await db.update_submission_status(sub_id, new_status)
+    user_id = sub["user_id"]
+
+    # Notify User based on status
+    if new_status == "IN_REVIEW":
+        user_msg = (
+            f"🔍 <b>Status Update</b>\n\n"
+            f"Your submission (ID: #{sub_id}) status has changed to <b>In Review</b>!\n"
+            f"Our team is currently reviewing and verifying your details.\n\n"
+            f"📅 <b>Submitted Date:</b> {sub['created_at']}"
+        )
+        try:
+            await context.bot.send_message(chat_id=user_id, text=user_msg, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+
+    elif new_status == "ACCEPTED":
+        user_msg = (
+            f"✅ <b>Status Update</b>\n\n"
+            f"status changed to accepted your payment will be made soon\n\n"
+            f"🆔 <b>Submission ID:</b> #{sub_id}\n"
+            f"👤 <b>Name:</b> {sub['full_name']}\n"
+            f"📧 <b>Email:</b> <code>{sub['email']}</code>\n"
+            f"📅 <b>Submitted Date:</b> {sub['created_at']}"
+        )
+        try:
+            await context.bot.send_message(chat_id=user_id, text=user_msg, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+
+    # Update admin message
+    q_info = await db.get_queue_info(sub_id) if new_status == "PENDING" else None
+    card_text = format_admin_submission_card(updated_sub, q_info)
+    kb = admin_submission_actions_keyboard(sub_id, new_status)
+
+    await query.edit_message_text(
+        f"✅ <b>Status updated to {new_status}!</b>\n\n" + card_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb
+    )
+
+async def admin_disapprove_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    sub_id = int(query.data.split(":")[1])
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Invalid Unique Code", callback_data=f"adm_dis_do:{sub_id}:Invalid unique code")],
+        [InlineKeyboardButton("❌ Duplicate / Multiple Account", callback_data=f"adm_dis_do:{sub_id}:Duplicate / Multi-accounting prohibited")],
+        [InlineKeyboardButton("❌ Information Mismatch", callback_data=f"adm_dis_do:{sub_id}:Information mismatch on website")],
+        [InlineKeyboardButton("❌ General Disapproval", callback_data=f"adm_dis_do:{sub_id}:Verification requirements not met")],
+        [InlineKeyboardButton("🔙 Back", callback_data=f"adm_view:{sub_id}")]
+    ])
+    await query.edit_message_text(
+        f"Select a reason for disapproving Submission #{sub_id}:",
+        reply_markup=kb
+    )
+
+async def admin_disapprove_do_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    # Callback format: adm_dis_do:<SUB_ID>:<REASON>
+    parts = query.data.split(":", 2)
+    sub_id = int(parts[1])
+    reason = parts[2]
+
+    sub = await db.get_submission_by_id(sub_id)
+    if not sub:
+        await query.edit_message_text("⚠️ Submission not found.")
+        return
+
+    updated_sub = await db.update_submission_status(sub_id, "DISAPPROVED", admin_notes=reason)
+
+    # Notify User
+    user_msg = (
+        f"❌ <b>Status Update: Submission Disapproved</b>\n\n"
+        f"Your submission (ID: #{sub_id}) was <b>Disapproved</b>.\n"
+        f"📝 <b>Reason:</b> {reason}\n"
+        f"📅 <b>Submitted Date:</b> {sub['created_at']}\n\n"
+        f"If you believe this was in error, you can submit an appeal by pressing <b>⚖️ Submit Appeal</b> in the bot menu."
+    )
+    try:
+        await context.bot.send_message(chat_id=sub["user_id"], text=user_msg, parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+    card_text = format_admin_submission_card(updated_sub)
+    kb = admin_submission_actions_keyboard(sub_id, "DISAPPROVED")
+    await query.edit_message_text(
+        f"❌ <b>Submission #{sub_id} Disapproved!</b>\n\n" + card_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb
+    )
+
+async def admin_resubmit_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    sub_id = int(query.data.split(":")[1])
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Re-enter Unique Code", callback_data=f"adm_res_do:{sub_id}:Please provide a valid unique code")],
+        [InlineKeyboardButton("🔄 Re-enter Name/Email", callback_data=f"adm_res_do:{sub_id}:Please re-enter correct name and email")],
+        [InlineKeyboardButton("🔄 General Resubmission", callback_data=f"adm_res_do:{sub_id}:Please check and re-submit your details")],
+        [InlineKeyboardButton("🔙 Back", callback_data=f"adm_view:{sub_id}")]
+    ])
+    await query.edit_message_text(
+        f"Select a reason to allow resubmission for #{sub_id}:",
+        reply_markup=kb
+    )
+
+async def admin_resubmit_do_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    parts = query.data.split(":", 2)
+    sub_id = int(parts[1])
+    reason = parts[2]
+
+    sub = await db.get_submission_by_id(sub_id)
+    if not sub:
+        await query.edit_message_text("⚠️ Submission not found.")
+        return
+
+    updated_sub = await db.update_submission_status(sub_id, "CAN_RESUBMIT", admin_notes=reason)
+
+    # Notify User
+    user_msg = (
+        f"⚠️ <b>Status Update: Resubmission Allowed</b>\n\n"
+        f"Your submission (ID: #{sub_id}) status changed to: <b>Can Be Resubmitted</b>.\n"
+        f"📝 <b>Note:</b> {reason}\n"
+        f"📅 <b>Original Submission Date:</b> {sub['created_at']}\n\n"
+        f"You can now resubmit your corrected details anytime by tapping <b>📝 Submit Information</b>."
+    )
+    try:
+        await context.bot.send_message(chat_id=sub["user_id"], text=user_msg, parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+    card_text = format_admin_submission_card(updated_sub)
+    kb = admin_submission_actions_keyboard(sub_id, "CAN_RESUBMIT")
+    await query.edit_message_text(
+        f"🔄 <b>Submission #{sub_id} marked as CAN_RESUBMIT!</b>\n\n" + card_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb
+    )
+
+async def admin_appeals_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    appeals = await db.get_pending_appeals(limit=5)
+    if not appeals:
+        await query.edit_message_text(
+            "ℹ️ <b>No Pending Appeals</b>\nThere are currently no unresolved appeals.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")
+            ]])
+        )
+        return
+
+    text = "⚖️ <b>Pending Appeals:</b>\n━━━━━━━━━━━━━━━━━━━\n"
+    kb = []
+    for app in appeals:
+        text += (
+            f"• <b>Appeal #{app['id']}</b> (Submission #{app['submission_id']})\n"
+            f"  Date: {app['created_at']}\n"
+            f"  Reason: <i>{app['appeal_text'][:80]}...</i>\n\n"
+        )
+        kb.append([
+            InlineKeyboardButton(f"👉 Review Appeal #{app['id']}", callback_data=f"adm_app_view:{app['id']}")
+        ])
+
+    kb.append([InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")])
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
+
+async def admin_view_appeal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    appeal_id = int(query.data.split(":")[1])
+    appeal = await db.get_appeal_by_id(appeal_id)
+    if not appeal:
+        await query.edit_message_text("⚠️ Appeal not found.")
+        return
+
+    sub = await db.get_submission_by_id(appeal["submission_id"])
+    text = (
+        f"⚖️ <b>Appeal #{appeal['id']} Details</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"📋 <b>Submission ID:</b> #{appeal['submission_id']}\n"
+        f"👤 <b>Name:</b> {sub['full_name'] if sub else 'Unknown'}\n"
+        f"📧 <b>Email:</b> <code>{sub['email'] if sub else 'Unknown'}</code>\n"
+        f"🔑 <b>Unique Code:</b> <code>{sub['unique_code'] if sub else 'Unknown'}</code>\n"
+        f"💬 <b>Appeal Reason:</b>\n<i>{appeal['appeal_text']}</i>\n"
+        f"📅 <b>Appeal Date:</b> {appeal['created_at']}\n"
+        f"━━━━━━━━━━━━━━━━━━━"
+    )
+    from keyboards import appeal_admin_keyboard
+    await query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=appeal_admin_keyboard(appeal_id)
+    )
+
+async def admin_appeal_decision_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    # Callback format: app_dec:<APPEAL_ID>:<DECISION>
+    parts = query.data.split(":")
+    appeal_id = int(parts[1])
+    decision = parts[2]
+
+    appeal = await db.get_appeal_by_id(appeal_id)
+    if not appeal:
+        await query.edit_message_text("⚠️ Appeal not found.")
+        return
+
+    sub_id = appeal["submission_id"]
+    sub = await db.get_submission_by_id(sub_id)
+    user_id = appeal["user_id"]
+
+    if decision == "ACCEPT":
+        await db.update_appeal_status(appeal_id, "APPROVED", "Accepted by admin")
+        await db.update_submission_status(sub_id, "ACCEPTED", admin_notes="Accepted via appeal")
+        user_msg = (
+            f"🎉 <b>Appeal Approved!</b>\n\n"
+            f"status changed to accepted your payment will be made soon\n\n"
+            f"🆔 <b>Submission ID:</b> #{sub_id}\n"
+            f"📧 <b>Email:</b> <code>{sub['email']}</code>"
+        )
+        try:
+            await context.bot.send_message(chat_id=user_id, text=user_msg, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+
+        await query.edit_message_text(
+            f"✅ <b>Appeal #{appeal_id} APPROVED & Submission #{sub_id} marked as ACCEPTED!</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")
+            ]])
+        )
+
+    elif decision == "RESUBMIT":
+        await db.update_appeal_status(appeal_id, "APPROVED", "Resubmission granted")
+        await db.update_submission_status(sub_id, "CAN_RESUBMIT", admin_notes="Resubmission granted via appeal")
+        user_msg = (
+            f"⚠️ <b>Appeal Decision: Resubmission Granted</b>\n\n"
+            f"Your appeal was reviewed and approved for resubmission.\n"
+            f"You can now submit corrected details using <b>📝 Submit Information</b>."
+        )
+        try:
+            await context.bot.send_message(chat_id=user_id, text=user_msg, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+
+        await query.edit_message_text(
+            f"🔄 <b>Appeal #{appeal_id} processed: Submission #{sub_id} unlocked for resubmission!</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")
+            ]])
+        )
+
+    elif decision == "REJECT":
+        await db.update_appeal_status(appeal_id, "REJECTED", "Rejected by admin")
+        user_msg = (
+            f"❌ <b>Appeal Decision</b>\n\n"
+            f"Your appeal for Submission #{sub_id} was reviewed and <b>Disapproved</b> by the administration team."
+        )
+        try:
+            await context.bot.send_message(chat_id=user_id, text=user_msg, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+
+        await query.edit_message_text(
+            f"❌ <b>Appeal #{appeal_id} REJECTED.</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")
+            ]])
+        )
+
+async def admin_export_csv_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Generating CSV...")
+    if not is_admin(query.from_user.id):
+        return
+
+    submissions = await db.get_all_submissions()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "User ID", "Username", "Full Name", "Email", "Unique Code", "Status", "Admin Notes", "Created At", "Updated At"])
+
+    for s in submissions:
+        writer.writerow([
+            s["id"],
+            s["user_id"],
+            s.get("username") or "",
+            s["full_name"],
+            s["email"],
+            s["unique_code"],
+            s["status"],
+            s.get("admin_notes") or "",
+            s["created_at"],
+            s["updated_at"]
+        ])
+
+    csv_bytes = io.BytesIO(output.getvalue().encode("utf-8"))
+    csv_bytes.name = "submissions_export.csv"
+
+    await query.message.reply_document(
+        document=InputFile(csv_bytes, filename="submissions_export.csv"),
+        caption=f"📊 <b>Submissions Export</b>\nTotal records: {len(submissions)}",
+        parse_mode=ParseMode.HTML
+    )
+
+async def admin_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "🔎 <b>Search Usage:</b>\n<code>/search &lt;email, name, or code&gt;</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    query_str = " ".join(context.args)
+    results = await db.search_submissions(query_str)
+    if not results:
+        await update.message.reply_text(f"No results found for '<code>{query_str}</code>'.", parse_mode=ParseMode.HTML)
+        return
+
+    text = f"🔎 <b>Search Results for '{query_str}':</b>\n━━━━━━━━━━━━━━━━━━━\n"
+    kb = []
+    for item in results:
+        text += (
+            f"• <b>#{item['id']}</b> | {item['full_name']} | <code>{item['email']}</code>\n"
+            f"  Status: {item['status']} | Code: <code>{item['unique_code']}</code>\n\n"
+        )
+        kb.append([
+            InlineKeyboardButton(f"👉 Manage #{item['id']}", callback_data=f"adm_view:{item['id']}")
+        ])
+
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
+
+WAIT_ADMIN_BROADCAST = 302
+
+async def admin_broadcast_prompt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    count = await db.get_total_users_count()
+    await query.message.reply_text(
+        f"📢 <b>Create Announcement</b>\n\n"
+        f"There are currently <b>{count}</b> registered users in the database.\n\n"
+        f"Please send the message you want to broadcast to everyone.\n"
+        f"<i>(You can use bold, italics, links, and emojis)</i>\n\n"
+        f"Send <b>❌ Cancel</b> to abort.",
+        parse_mode=ParseMode.HTML
+    )
+    return WAIT_ADMIN_BROADCAST
+
+async def receive_broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+
+    msg_text = update.message.text.strip()
+    if msg_text == "❌ Cancel":
+        await update.message.reply_text("Announcement broadcast cancelled.")
+        return ConversationHandler.END
+
+    count = await db.get_total_users_count()
+    context.user_data["broadcast_content"] = msg_text
+
+    confirm_kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🚀 Confirm & Send to All", callback_data="adm_bcast_do"),
+            InlineKeyboardButton("❌ Cancel", callback_data="adm_bcast_cancel")
+        ]
+    ])
+
+    await update.message.reply_text(
+        f"📢 <b>Announcement Preview:</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"{msg_text}\n"
+        f"━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Target Audience: <b>{count} users</b>\n"
+        f"Are you sure you want to broadcast this message to everyone?",
+        parse_mode=ParseMode.HTML,
+        reply_markup=confirm_kb
+    )
+    return ConversationHandler.END
+
+async def execute_broadcast(bot, user_ids: list, message_text: str) -> dict:
+    import asyncio
+    from telegram.error import Forbidden, BadRequest, RetryAfter
+
+    sent = 0
+    failed = 0
+    formatted_msg = f"📢 <b>Announcement</b>\n\n{message_text}"
+
+    for uid in user_ids:
+        try:
+            await bot.send_message(
+                chat_id=uid,
+                text=formatted_msg,
+                parse_mode=ParseMode.HTML
+            )
+            sent += 1
+            await asyncio.sleep(0.04)  # 25 messages per second to respect Telegram rate limits
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after)
+            try:
+                await bot.send_message(chat_id=uid, text=formatted_msg, parse_mode=ParseMode.HTML)
+                sent += 1
+            except Exception:
+                failed += 1
+        except (Forbidden, BadRequest):
+            # User blocked bot or chat deleted
+            failed += 1
+        except Exception:
+            failed += 1
+
+    return {"total": len(user_ids), "sent": sent, "failed": failed}
+
+async def admin_broadcast_do_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Broadcasting announcement...")
+    if not is_admin(query.from_user.id):
+        return
+
+    text = context.user_data.get("broadcast_content")
+    if not text:
+        await query.edit_message_text("⚠️ No broadcast content found. Please start over.")
+        return
+
+    await query.edit_message_text("⏳ <b>Broadcasting announcement to all users...</b>\nPlease wait.", parse_mode=ParseMode.HTML)
+
+    user_ids = await db.get_all_user_ids()
+    res = await execute_broadcast(context.bot, user_ids, text)
+    context.user_data.pop("broadcast_content", None)
+
+    await query.edit_message_text(
+        f"✅ <b>Announcement Broadcast Completed!</b>\n\n"
+        f"• 👥 <b>Total Targets:</b> {res['total']}\n"
+        f"• 🚀 <b>Successfully Sent:</b> {res['sent']}\n"
+        f"• ⚠️ <b>Failed / Blocked:</b> {res['failed']}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")
+        ]])
+    )
+
+async def admin_broadcast_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Cancelled.")
+    context.user_data.pop("broadcast_content", None)
+    await query.edit_message_text("❌ Broadcast cancelled.")
+
+async def admin_quick_broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "📢 <b>Broadcast Command Usage:</b>\n"
+            "<code>/broadcast Your message text here</code>\n\n"
+            "Or use <b>⚙️ Admin Dashboard ➔ 📢 Make Announcement</b> for an interactive preview.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    msg_text = " ".join(context.args)
+    user_ids = await db.get_all_user_ids()
+    status_msg = await update.message.reply_text(
+        f"⏳ Broadcasting to {len(user_ids)} users...",
+        parse_mode=ParseMode.HTML
+    )
+
+    res = await execute_broadcast(context.bot, user_ids, msg_text)
+    await status_msg.edit_text(
+        f"✅ <b>Broadcast Completed!</b>\n\n"
+        f"• 👥 <b>Total Targets:</b> {res['total']}\n"
+        f"• 🚀 <b>Delivered:</b> {res['sent']}\n"
+        f"• ⚠️ <b>Failed / Blocked:</b> {res['failed']}",
+        parse_mode=ParseMode.HTML
+    )
+
