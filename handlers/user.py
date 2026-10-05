@@ -78,6 +78,7 @@ def format_status_text(submission: dict, queue_info: dict = None) -> str:
     return text
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     user = update.effective_user
     is_admin = user.id in ADMIN_IDS
 

@@ -137,11 +137,11 @@ async def admin_list_submissions_callback(update: Update, context: ContextTypes.
 
     for item in items:
         text += (
-            f"• <b>#{item['id']}</b> | {item['full_name']} | <code>{item['email']}</code>\n"
-            f"  Code: <code>{item['unique_code']}</code> | Date: {item['created_at']}\n\n"
+            f"• <b>#{item['id']}</b> | <code>{item['email']}</code>\n"
+            f"  PASS: <code>{item.get('pass_code') or item.get('full_name')}</code> | Key: <code>{item.get('key_code') or item.get('unique_code')}</code> | Date: {item['created_at']}\n\n"
         )
         keyboard_buttons.append([
-            InlineKeyboardButton(f"👉 Manage #{item['id']} ({item['full_name'][:12]})", callback_data=f"adm_view:{item['id']}")
+            InlineKeyboardButton(f"👉 Manage #{item['id']} ({item['email'][:16]})", callback_data=f"adm_view:{item['id']}")
         ])
 
     nav_row = []
@@ -215,8 +215,8 @@ async def admin_change_status_callback(update: Update, context: ContextTypes.DEF
             f"✅ <b>Status Update</b>\n\n"
             f"status changed to accepted your payment will be made soon\n\n"
             f"🆔 <b>Submission ID:</b> #{sub_id}\n"
-            f"👤 <b>Name:</b> {sub['full_name']}\n"
             f"📧 <b>Email:</b> <code>{sub['email']}</code>\n"
+            f"💰 <b>Payout Amount:</b> <b>₹370</b>\n"
             f"📅 <b>Submitted Date:</b> {sub['created_at']}"
         )
         try:
@@ -301,8 +301,8 @@ async def admin_resubmit_menu_callback(update: Update, context: ContextTypes.DEF
 
     sub_id = int(query.data.split(":")[1])
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Re-enter Unique Code", callback_data=f"adm_res_do:{sub_id}:Please provide a valid unique code")],
-        [InlineKeyboardButton("🔄 Re-enter Name/Email", callback_data=f"adm_res_do:{sub_id}:Please re-enter correct name and email")],
+        [InlineKeyboardButton("🔄 Re-enter Key", callback_data=f"adm_res_do:{sub_id}:Please provide a valid Key")],
+        [InlineKeyboardButton("🔄 Re-enter Email/PASS", callback_data=f"adm_res_do:{sub_id}:Please re-enter correct email and PASS")],
         [InlineKeyboardButton("🔄 General Resubmission", callback_data=f"adm_res_do:{sub_id}:Please check and re-submit your details")],
         [InlineKeyboardButton("🔙 Back", callback_data=f"adm_view:{sub_id}")]
     ])
@@ -394,13 +394,15 @@ async def admin_view_appeal_callback(update: Update, context: ContextTypes.DEFAU
         return
 
     sub = await db.get_submission_by_id(appeal["submission_id"])
+    pass_val = sub.get("pass_code") or sub.get("full_name") if sub else "N/A"
+    key_val = sub.get("key_code") or sub.get("unique_code") if sub else "N/A"
     text = (
         f"⚖️ <b>Appeal #{appeal['id']} Details</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"📋 <b>Submission ID:</b> #{appeal['submission_id']}\n"
-        f"👤 <b>Name:</b> {sub['full_name'] if sub else 'Unknown'}\n"
         f"📧 <b>Email:</b> <code>{sub['email'] if sub else 'Unknown'}</code>\n"
-        f"🔑 <b>Unique Code:</b> <code>{sub['unique_code'] if sub else 'Unknown'}</code>\n"
+        f"🔒 <b>PASS:</b> <code>{pass_val}</code>\n"
+        f"🔑 <b>Key:</b> <code>{key_val}</code>\n"
         f"💬 <b>Appeal Reason:</b>\n<i>{appeal['appeal_text']}</i>\n"
         f"📅 <b>Appeal Date:</b> {appeal['created_at']}\n"
         f"━━━━━━━━━━━━━━━━━━━"

@@ -111,7 +111,8 @@ def main():
         },
         fallbacks=[
             MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation)
+            CommandHandler("cancel", cancel_conversation),
+            CommandHandler("start", start_handler)
         ],
         allow_reentry=True
     )
@@ -128,7 +129,8 @@ def main():
         },
         fallbacks=[
             MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation)
+            CommandHandler("cancel", cancel_conversation),
+            CommandHandler("start", start_handler)
         ],
         allow_reentry=True
     )
@@ -145,7 +147,8 @@ def main():
         },
         fallbacks=[
             MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation)
+            CommandHandler("cancel", cancel_conversation),
+            CommandHandler("start", start_handler)
         ],
         allow_reentry=True
     )
