@@ -57,12 +57,17 @@ async def init_db():
             );
         """)
 
-        # Backward-compatible columns for PASS and Key
-        for col in ["pass_code", "key_code"]:
+        # Backward-compatible columns for PASS, Key, and Resubmissions
+        for col in ["pass_code", "key_code", "resubmitted_at"]:
             try:
                 await db.execute(f"ALTER TABLE submissions ADD COLUMN {col} TEXT;")
             except Exception:
                 pass
+
+        try:
+            await db.execute("ALTER TABLE submissions ADD COLUMN is_resubmission INTEGER DEFAULT 0;")
+        except Exception:
+            pass
 
         await db.commit()
 
@@ -85,6 +90,36 @@ async def is_email_registered(email: str, exclude_submission_id: Optional[int] =
             )
         row = await cursor.fetchone()
         return row is not None
+
+async def get_submission_by_email(email: str) -> Optional[Dict[str, Any]]:
+    clean_email = email.strip().lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM submissions WHERE LOWER(email) = ? ORDER BY id DESC LIMIT 1",
+            (clean_email,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+def check_8_hour_cooldown(timestamp_str: str) -> tuple[bool, int, int]:
+    """
+    Checks if 8 hours have passed since timestamp_str.
+    Returns: (can_resubmit: bool, remaining_hours: int, remaining_mins: int)
+    """
+    try:
+        past_dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S UTC").replace(tzinfo=timezone.utc)
+    except Exception:
+        return (True, 0, 0)
+    now_dt = datetime.now(timezone.utc)
+    elapsed_secs = (now_dt - past_dt).total_seconds()
+    cooldown_secs = 8 * 3600  # 8 hours = 28,800 seconds
+    if elapsed_secs >= cooldown_secs:
+        return (True, 0, 0)
+    diff = cooldown_secs - elapsed_secs
+    hours = int(diff // 3600)
+    mins = int((diff % 3600) // 60)
+    return (False, hours, mins)
 
 async def get_submission_by_user(user_id: int) -> Optional[Dict[str, Any]]:
     """Gets the latest submission for a given Telegram user ID."""
@@ -139,12 +174,30 @@ async def update_submission_resubmit(submission_id: int, email: str, pass_code: 
         await db.execute(
             """
             UPDATE submissions
-            SET email = ?, full_name = ?, unique_code = ?, pass_code = ?, key_code = ?, status = 'PENDING', admin_notes = NULL, updated_at = ?
+            SET email = ?, full_name = ?, unique_code = ?, pass_code = ?, key_code = ?, 
+                status = 'PENDING', is_resubmission = 1, resubmitted_at = ?, admin_notes = NULL, updated_at = ?
             WHERE id = ?
             """,
-            (clean_email, pass_code.strip(), key_code.strip(), pass_code.strip(), key_code.strip(), ts, submission_id)
+            (clean_email, pass_code.strip(), key_code.strip(), pass_code.strip(), key_code.strip(), ts, ts, submission_id)
         )
         await db.commit()
+
+async def get_resubmitted_submissions(limit: int = 5, offset: int = 0) -> List[Dict[str, Any]]:
+    """Gets all submissions that were resubmitted by users."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM submissions WHERE is_resubmission = 1 ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+async def get_resubmitted_count() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM submissions WHERE is_resubmission = 1")
+        row = await cursor.fetchone()
+        return row[0] if row else 0
 
 async def update_submission_status(submission_id: int, new_status: str, admin_notes: Optional[str] = None) -> Optional[Dict[str, Any]]:
     ts = now_iso()
@@ -223,6 +276,10 @@ async def get_admin_stats() -> Dict[str, int]:
         cursor_app = await db.execute("SELECT COUNT(*) FROM appeals WHERE status = 'PENDING'")
         app_row = await cursor_app.fetchone()
         stats["appeals_pending"] = app_row[0] if app_row else 0
+
+        cursor_resub = await db.execute("SELECT COUNT(*) FROM submissions WHERE is_resubmission = 1")
+        resub_row = await cursor_resub.fetchone()
+        stats["resubmitted"] = resub_row[0] if resub_row else 0
 
         return stats
 

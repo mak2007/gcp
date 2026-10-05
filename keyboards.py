@@ -44,15 +44,18 @@ def admin_dashboard_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🔍 In Review", callback_data="adm_list:IN_REVIEW:0")
         ],
         [
-            InlineKeyboardButton("⚖️ Pending Appeals", callback_data="adm_appeals:0"),
-            InlineKeyboardButton("📊 Overall Stats", callback_data="adm_stats")
+            InlineKeyboardButton("🔄 Resubmitted Emails", callback_data="adm_resub_list:0"),
+            InlineKeyboardButton("⚖️ Pending Appeals", callback_data="adm_appeals:0")
         ],
         [
-            InlineKeyboardButton("📢 Make Announcement", callback_data="adm_broadcast_prompt"),
-            InlineKeyboardButton("📥 Export CSV", callback_data="adm_export_csv")
+            InlineKeyboardButton("📊 Overall Stats", callback_data="adm_stats"),
+            InlineKeyboardButton("📢 Make Announcement", callback_data="adm_broadcast_prompt")
         ],
         [
-            InlineKeyboardButton("📄 Export TXT", callback_data="adm_export_txt"),
+            InlineKeyboardButton("📥 Export CSV", callback_data="adm_export_csv"),
+            InlineKeyboardButton("📄 Export TXT", callback_data="adm_export_txt")
+        ],
+        [
             InlineKeyboardButton("🔎 Search Submission", callback_data="adm_search_prompt")
         ]
     ])

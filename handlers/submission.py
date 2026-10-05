@@ -35,7 +35,7 @@ async def start_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     intro_text = (
         "📧 <b>Step 1 of 3: Enter Your Email Address</b>\n\n"
         "Please enter your email address:\n"
-        "<i>(Note: Only 1 query per email is allowed. Duplicate emails are strictly rejected instantly.)</i>\n\n"
+        "<i>(Note: Multiple submissions allowed. Resubmitting the same email requires an 8-hour cooldown.)</i>\n\n"
         "<i>Or press ❌ Cancel anytime to stop.</i>"
     )
     await update.message.reply_text(
@@ -65,22 +65,52 @@ async def receive_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     clean_email = email.lower()
 
-    # INSTANT DUPLICATE EMAIL CHECK
-    is_dup = await db.is_email_registered(clean_email)
-    if is_dup:
-        await update.message.reply_text(
-            f"🚫 <b>SUBMISSION REJECTED: DUPLICATE EMAIL</b>\n\n"
-            f"The email <code>{clean_email}</code> is <b>already registered</b> in our database "
-            f"or was submitted previously.\n\n"
-            f"⚠️ <b>Policy:</b> Only <b>1 query per email</b> is allowed. "
-            f"Duplicate entries are strictly disallowed.\n\n"
-            f"Your submission has been cancelled immediately.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=main_menu_keyboard(is_admin)
-        )
-        context.user_data.clear()
-        return ConversationHandler.END
+    # Check for existing submission of this email
+    existing = await db.get_submission_by_email(clean_email)
+    if existing:
+        # If already accepted, block
+        if existing["status"] == "ACCEPTED":
+            await update.message.reply_text(
+                f"🚫 <b>SUBMISSION REJECTED: ALREADY ACCEPTED</b>\n\n"
+                f"The email <code>{clean_email}</code> has already been accepted and processed.\n\n"
+                f"Accepted emails cannot be resubmitted.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu_keyboard(is_admin)
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
 
+        # Check 8-hour cooldown
+        last_time = existing.get("resubmitted_at") or existing.get("updated_at") or existing.get("created_at")
+        can_resubmit, rem_h, rem_m = db.check_8_hour_cooldown(last_time)
+        if not can_resubmit:
+            await update.message.reply_text(
+                f"⏱️ <b>8-HOUR COOLDOWN ACTIVE</b>\n\n"
+                f"The email <code>{clean_email}</code> was submitted previously.\n"
+                f"You can only resubmit this email after <b>8 hours</b> from the previous submission.\n\n"
+                f"⏳ <b>Time Remaining:</b> <b>{rem_h}h {rem_m}m</b>\n\n"
+                f"Please wait until the 8-hour cooldown expires before resubmitting.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu_keyboard(is_admin)
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
+
+        # Cooldown passed! Allow resubmission
+        context.user_data["resubmitting_id"] = existing["id"]
+        context.user_data["sub_email"] = clean_email
+        await update.message.reply_text(
+            f"🔄 <b>Resubmission Allowed:</b> <code>{clean_email}</code>\n"
+            f"<i>(8-hour cooldown passed. Please enter your updated details.)</i>\n\n"
+            f"🔒 <b>Step 2 of 3: Enter PASS</b>\n"
+            f"Please enter your <b>PASS</b>:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=cancel_keyboard()
+        )
+        return WAIT_PASS
+
+    # Brand new email
+    context.user_data["resubmitting_id"] = None
     context.user_data["sub_email"] = clean_email
 
     # Step 2: Ask for PASS
@@ -181,8 +211,10 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data.clear()
         return ConversationHandler.END
 
-    # Final duplicate email check before commit
-    is_dup = await db.is_email_registered(email)
+    resub_id = context.user_data.get("resubmitting_id")
+
+    # Final duplicate email check before commit (exclude existing submission if resubmitting)
+    is_dup = await db.is_email_registered(email, exclude_submission_id=resub_id)
     if is_dup:
         await query.edit_message_text(
             f"🚫 <b>Duplicate Email Detected:</b> <code>{email}</code> was already registered. Submission cancelled.",
@@ -191,14 +223,18 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data.clear()
         return ConversationHandler.END
 
-    # Save to database
-    submission_id = await db.create_submission(
-        user_id=user.id,
-        username=user.username,
-        email=email,
-        pass_code=pass_code,
-        key_code=key_code
-    )
+    # Save to database (update if resubmission, else create new)
+    if resub_id:
+        await db.update_submission_resubmit(resub_id, email, pass_code, key_code)
+        submission_id = resub_id
+    else:
+        submission_id = await db.create_submission(
+            user_id=user.id,
+            username=user.username,
+            email=email,
+            pass_code=pass_code,
+            key_code=key_code
+        )
     submission_obj = await db.get_submission_by_id(submission_id)
 
     # Queue Calculation
@@ -207,29 +243,51 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     ahead_count = queue_info["ahead_count"]
     total_pending = queue_info["total_pending"]
     submitted_date = submission_obj["created_at"]
+    resub_date = submission_obj.get("resubmitted_at") or submission_obj.get("updated_at")
 
     context.user_data.clear()
 
     # Success confirmation message to User
-    user_confirm = (
-        f"🎉 <b>Submission Received Successfully!</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"🆔 <b>Submission ID:</b> #{submission_id}\n"
-        f"📧 <b>Email:</b> <code>{email}</code>\n"
-        f"🔒 <b>PASS:</b> <code>{pass_code}</code>\n"
-        f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
-        f"📅 <b>Submitted Date:</b> {submitted_date}\n"
-        f"━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🔢 <b>Queue Information:</b>\n"
-        f"• <b>Your Queue Position:</b> #{position}\n"
-        f"• <b>Submissions Ahead of You:</b> {ahead_count} waiting for review\n"
-        f"• <b>Total Pending Queue:</b> {total_pending}\n\n"
-        f"⏳ <b>Current Status:</b> <b>Pending Review</b>\n\n"
-        f"📢 <b>Next Steps:</b>\n"
-        f"1. When an admin starts reviewing, your status will change to <b>In Review</b>.\n"
-        f"2. Once accepted, you will receive: <i>'status changed to accepted your payment will be made soon'</i>.\n"
-        f"3. You can track your position anytime using the <b>📊 Check Status & Queue</b> button."
-    )
+    if resub_id:
+        user_confirm = (
+            f"🔄 <b>Resubmission Received Successfully!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🆔 <b>Submission ID:</b> #{submission_id}\n"
+            f"📧 <b>Email:</b> <code>{email}</code>\n"
+            f"🔒 <b>PASS:</b> <code>{pass_code}</code>\n"
+            f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
+            f"📅 <b>Resubmitted Date:</b> {resub_date}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🔢 <b>Queue Information:</b>\n"
+            f"• <b>Your Queue Position:</b> #{position}\n"
+            f"• <b>Submissions Ahead of You:</b> {ahead_count} waiting for review\n"
+            f"• <b>Total Pending Queue:</b> {total_pending}\n\n"
+            f"⏳ <b>Current Status:</b> <b>Pending Review</b>\n\n"
+            f"📢 <b>Next Steps:</b>\n"
+            f"1. When an admin starts reviewing, your status will change to <b>In Review</b>.\n"
+            f"2. Once accepted, you will receive: <i>'status changed to accepted your payment will be made soon'</i>.\n"
+            f"3. You can track your position anytime using the <b>📊 Check Status & Queue</b> button."
+        )
+    else:
+        user_confirm = (
+            f"🎉 <b>Submission Received Successfully!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🆔 <b>Submission ID:</b> #{submission_id}\n"
+            f"📧 <b>Email:</b> <code>{email}</code>\n"
+            f"🔒 <b>PASS:</b> <code>{pass_code}</code>\n"
+            f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
+            f"📅 <b>Submitted Date:</b> {submitted_date}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🔢 <b>Queue Information:</b>\n"
+            f"• <b>Your Queue Position:</b> #{position}\n"
+            f"• <b>Submissions Ahead of You:</b> {ahead_count} waiting for review\n"
+            f"• <b>Total Pending Queue:</b> {total_pending}\n\n"
+            f"⏳ <b>Current Status:</b> <b>Pending Review</b>\n\n"
+            f"📢 <b>Next Steps:</b>\n"
+            f"1. When an admin starts reviewing, your status will change to <b>In Review</b>.\n"
+            f"2. Once accepted, you will receive: <i>'status changed to accepted your payment will be made soon'</i>.\n"
+            f"3. You can track your position anytime using the <b>📊 Check Status & Queue</b> button."
+        )
     await query.edit_message_text(
         user_confirm,
         parse_mode=ParseMode.HTML
@@ -242,19 +300,34 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
     # Alert to Admins
-    admin_alert = (
-        f"🔔 <b>New Submission Received!</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"🆔 <b>Submission ID:</b> #{submission_id}\n"
-        f"👤 <b>User:</b> @{user.username or 'NoUsername'} (ID: <code>{user.id}</code>)\n"
-        f"📧 <b>Email:</b> <code>{email}</code>\n"
-        f"🔒 <b>PASS:</b> <code>{pass_code}</code>\n"
-        f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
-        f"📅 <b>Date:</b> {submitted_date}\n"
-        f"🔢 <b>Queue Position:</b> #{position} (Total Pending: {total_pending})\n"
-        f"📊 <b>Status:</b> ⏳ PENDING\n"
-        f"━━━━━━━━━━━━━━━━━━━"
-    )
+    if resub_id:
+        admin_alert = (
+            f"🔄 <b>Resubmitted Details Received!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🆔 <b>Submission ID:</b> #{submission_id} (RESUBMITTED)\n"
+            f"👤 <b>User:</b> @{user.username or 'NoUsername'} (ID: <code>{user.id}</code>)\n"
+            f"📧 <b>Email:</b> <code>{email}</code>\n"
+            f"🔒 <b>PASS:</b> <code>{pass_code}</code>\n"
+            f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
+            f"📅 <b>Resubmitted Date:</b> {resub_date}\n"
+            f"🔢 <b>Queue Position:</b> #{position} (Total Pending: {total_pending})\n"
+            f"📊 <b>Status:</b> ⏳ PENDING\n"
+            f"━━━━━━━━━━━━━━━━━━━"
+        )
+    else:
+        admin_alert = (
+            f"🔔 <b>New Submission Received!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🆔 <b>Submission ID:</b> #{submission_id}\n"
+            f"👤 <b>User:</b> @{user.username or 'NoUsername'} (ID: <code>{user.id}</code>)\n"
+            f"📧 <b>Email:</b> <code>{email}</code>\n"
+            f"🔒 <b>PASS:</b> <code>{pass_code}</code>\n"
+            f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
+            f"📅 <b>Date:</b> {submitted_date}\n"
+            f"🔢 <b>Queue Position:</b> #{position} (Total Pending: {total_pending})\n"
+            f"📊 <b>Status:</b> ⏳ PENDING\n"
+            f"━━━━━━━━━━━━━━━━━━━"
+        )
     for admin_id in ADMIN_IDS:
         try:
             await context.bot.send_message(
@@ -277,7 +350,7 @@ async def sub_restart_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         "🔄 <b>Starting over.</b>\n\n"
         "📧 <b>Step 1 of 3: Enter Your Email Address</b>\n"
         "Please enter your email address:\n"
-        "<i>(Note: Only 1 query per email is allowed.)</i>",
+        "<i>(Note: Resubmitting the same email requires an 8-hour cooldown.)</i>",
         parse_mode=ParseMode.HTML
     )
     return WAIT_EMAIL

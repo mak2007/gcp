@@ -33,6 +33,9 @@ def format_admin_submission_card(sub: dict, queue_info: dict = None) -> str:
         f"📅 <b>Submitted Date:</b> {sub['created_at']}\n"
         f"📊 <b>Status:</b> <b>{status_str}</b>\n"
     )
+    if sub.get("is_resubmission"):
+        text += f"🔄 <b>Resubmitted At:</b> {sub.get('resubmitted_at') or sub.get('updated_at')}\n"
+
     if sub.get("admin_notes"):
         text += f"📝 <b>Admin Notes:</b> {sub['admin_notes']}\n"
 
@@ -61,6 +64,7 @@ async def admin_dashboard_command(update: Update, context: ContextTypes.DEFAULT_
         f"• <b>Total Submissions:</b> {stats['total']}\n"
         f"• ⏳ <b>Pending in Queue:</b> {stats['pending']}\n"
         f"• 🔍 <b>In Review:</b> {stats['in_review']}\n"
+        f"• 🔄 <b>Resubmitted Emails:</b> {stats.get('resubmitted', 0)}\n"
         f"• ✅ <b>Accepted (Paid/Queued):</b> {stats['accepted']}\n"
         f"• ❌ <b>Disapproved:</b> {stats['disapproved']}\n"
         f"• 🔄 <b>Can Be Resubmitted:</b> {stats['can_resubmit']}\n"
@@ -95,6 +99,7 @@ async def admin_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         f"• <b>Total Submissions:</b> {stats['total']}\n"
         f"• ⏳ <b>Pending in Queue:</b> {stats['pending']}\n"
         f"• 🔍 <b>In Review:</b> {stats['in_review']}\n"
+        f"• 🔄 <b>Resubmitted Emails:</b> {stats.get('resubmitted', 0)}\n"
         f"• ✅ <b>Accepted:</b> {stats['accepted']}\n"
         f"• ❌ <b>Disapproved:</b> {stats['disapproved']}\n"
         f"• 🔄 <b>Can Be Resubmitted:</b> {stats['can_resubmit']}\n"
@@ -148,6 +153,72 @@ async def admin_list_submissions_callback(update: Update, context: ContextTypes.
         nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"adm_list:{status}:{max(0, offset - limit)}"))
     if len(items) == limit:
         nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"adm_list:{status}:{offset + limit}"))
+    if nav_row:
+        keyboard_buttons.append(nav_row)
+
+    keyboard_buttons.append([InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")])
+
+    await query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard_buttons)
+    )
+
+async def admin_list_resubmitted_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    # Callback format: adm_resub_list:<OFFSET>
+    parts = query.data.split(":")
+    offset = int(parts[1]) if len(parts) > 1 else 0
+    limit = 5
+
+    items = await db.get_resubmitted_submissions(limit=limit, offset=offset)
+    total_count = await db.get_resubmitted_count()
+
+    if not items:
+        await query.edit_message_text(
+            "ℹ️ <b>No Resubmitted Emails Found</b>\n"
+            "There are currently no resubmitted entries in the database.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")
+            ]])
+        )
+        return
+
+    text = f"🔄 <b>Resubmitted Emails List</b> (Page {offset // limit + 1} | Total: {total_count})\n━━━━━━━━━━━━━━━━━━━\n"
+    keyboard_buttons = []
+
+    for item in items:
+        status_emoji_map = {
+            "PENDING": "⏳ PENDING",
+            "IN_REVIEW": "🔍 IN REVIEW",
+            "ACCEPTED": "✅ ACCEPTED",
+            "DISAPPROVED": "❌ DISAPPROVED",
+            "CAN_RESUBMIT": "🔄 CAN RESUBMIT"
+        }
+        st_text = status_emoji_map.get(item["status"], item["status"])
+        resub_date = item.get("resubmitted_at") or item.get("updated_at")
+        text += (
+            f"• <b>#{item['id']}</b> | <code>{item['email']}</code>\n"
+            f"  🔒 PASS: <code>{item.get('pass_code') or item.get('full_name')}</code>\n"
+            f"  🔑 Key: <code>{item.get('key_code') or item.get('unique_code')}</code>\n"
+            f"  📊 Status: <b>{st_text}</b>\n"
+            f"  🔄 Resubmitted: {resub_date}\n"
+            f"  📅 Original: {item['created_at']}\n\n"
+        )
+        keyboard_buttons.append([
+            InlineKeyboardButton(f"👉 Manage #{item['id']} ({item['email'][:16]})", callback_data=f"adm_view:{item['id']}")
+        ])
+
+    nav_row = []
+    if offset > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"adm_resub_list:{max(0, offset - limit)}"))
+    if offset + limit < total_count:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"adm_resub_list:{offset + limit}"))
     if nav_row:
         keyboard_buttons.append(nav_row)
 

@@ -51,6 +51,7 @@ from handlers.admin import (
     admin_dashboard_command,
     admin_stats_callback,
     admin_list_submissions_callback,
+    admin_list_resubmitted_callback,
     admin_view_submission_callback,
     admin_change_status_callback,
     admin_disapprove_menu_callback,
@@ -204,6 +205,7 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_dashboard_command, pattern=r"^adm_dashboard_nav$"))
     app.add_handler(CallbackQueryHandler(admin_stats_callback, pattern=r"^adm_stats$"))
     app.add_handler(CallbackQueryHandler(admin_list_submissions_callback, pattern=r"^adm_list:"))
+    app.add_handler(CallbackQueryHandler(admin_list_resubmitted_callback, pattern=r"^adm_resub_list:"))
     app.add_handler(CallbackQueryHandler(admin_view_submission_callback, pattern=r"^adm_view:"))
     app.add_handler(CallbackQueryHandler(admin_change_status_callback, pattern=r"^adm_st:"))
     app.add_handler(CallbackQueryHandler(admin_disapprove_menu_callback, pattern=r"^adm_dis:\d+$"))

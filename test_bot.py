@@ -103,7 +103,14 @@ async def run_tests():
     assert re_sub["pass_code"] == "NEW_PASS_999"
     assert re_sub["key_code"] == "NEW_KEY_999"
     assert re_sub["email"] == "charlie_new@example.com"
-    print("✅ Resubmission flow passed.")
+    assert re_sub["is_resubmission"] == 1, "is_resubmission must be 1"
+    assert re_sub["resubmitted_at"] is not None, "resubmitted_at must be populated"
+
+    resub_list = await db.get_resubmitted_submissions()
+    assert len(resub_list) >= 1
+    assert any(r["id"] == sub_resubmit for r in resub_list)
+    assert await db.get_resubmitted_count() >= 1
+    print("✅ Resubmission flow and dedicated list passed.")
 
     # 5. Test Appeal
     appeal_id = await db.create_appeal(sub_resubmit, 555, "I submitted the wrong screenshot code, here is proof.")
@@ -127,6 +134,9 @@ async def run_tests():
     stats = await db.get_admin_stats()
     print(f"Stats: {stats}")
     assert stats["total"] > 0
+    assert stats["resubmitted"] >= 1, "Admin stats must include resubmitted count"
+    print("✅ Admin stats include resubmitted count passed.")
+
     # 8. Test User Registration & Broadcast targeting
     await db.register_user(777, "broadcast_user1", "Dave")
     await db.register_user(888, "broadcast_user2", "Eve")
@@ -146,11 +156,36 @@ async def run_tests():
     assert len(user_subs) == 3
     print(f"✅ Multiple submissions per user verified: user has {len(user_subs)} active submissions!")
 
+    # 10. Test 8-Hour Cooldown Logic
+    from datetime import datetime, timezone, timedelta
+    now_utc = datetime.now(timezone.utc)
+
+    # Submitted 2 hours ago: cooldown active
+    time_2h_ago = (now_utc - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S UTC")
+    can_resub, rem_h, rem_m = db.check_8_hour_cooldown(time_2h_ago)
+    assert not can_resub, "Should not be able to resubmit within 8 hours"
+    assert rem_h == 5 or rem_h == 6, f"Expected ~5-6h remaining, got {rem_h}"
+
+    # Submitted 7 hours 45 mins ago: cooldown active
+    time_almost = (now_utc - timedelta(hours=7, minutes=45)).strftime("%Y-%m-%d %H:%M:%S UTC")
+    can_resub2, rem_h2, rem_m2 = db.check_8_hour_cooldown(time_almost)
+    assert not can_resub2
+    assert rem_h2 == 0
+    assert 10 <= rem_m2 <= 16
+
+    # Submitted 8 hours 5 mins ago: cooldown passed
+    time_passed = (now_utc - timedelta(hours=8, minutes=5)).strftime("%Y-%m-%d %H:%M:%S UTC")
+    can_resub3, rem_h3, rem_m3 = db.check_8_hour_cooldown(time_passed)
+    assert can_resub3, "Should be able to resubmit after 8 hours"
+    assert rem_h3 == 0 and rem_m3 == 0
+
+    print("✅ 8-hour cooldown calculation logic passed.")
+
     # Cleanup test db
     if os.path.exists("test_bot.sqlite"):
         os.remove("test_bot.sqlite")
 
-    print("\n🎉 ALL 9 TEST SUITES PASSED PERFECTLY!")
+    print("\n🎉 ALL 10 TEST SUITES PASSED PERFECTLY!")
 
 if __name__ == "__main__":
     asyncio.run(run_tests())
