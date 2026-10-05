@@ -17,9 +17,11 @@ async def format_user_overview(user_id: int) -> str:
             "Tap <b>📝 Submit Information</b> below to get started!"
         )
 
-    text = f"📊 <b>Your Submissions Overview ({len(subs)} Total):</b>\n━━━━━━━━━━━━━━━━━━━\n\n"
+    display_subs = subs[:12]
+    note = f"<i>(Showing latest {len(display_subs)} submissions)</i>\n\n" if len(subs) > 12 else ""
+    text = f"📊 <b>Your Submissions Overview ({len(subs)} Total):</b>\n━━━━━━━━━━━━━━━━━━━\n{note}"
 
-    for i, s in enumerate(subs, 1):
+    for i, s in enumerate(display_subs, 1):
         status = s["status"]
         if status == "PENDING":
             q_info = await db.get_queue_info(s["id"])
@@ -79,6 +81,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=join_keyboard,
         disable_web_page_preview=True
     )
+    return ConversationHandler.END
 
 async def continue_main_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -100,6 +103,7 @@ async def check_status_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode=ParseMode.HTML,
         reply_markup=user_status_keyboard()
     )
+    return ConversationHandler.END
 
 async def refresh_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -135,9 +139,10 @@ async def receive_support_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
     msg_text = update.message.text.strip()
     is_admin = user.id in ADMIN_IDS
 
-    if msg_text == "❌ Cancel":
-        await update.message.reply_text("Support inquiry cancelled.", reply_markup=main_menu_keyboard(is_admin))
-        return ConversationHandler.END
+    from handlers.submission import check_menu_intercept
+    intercept_state = await check_menu_intercept(update, context, msg_text)
+    if intercept_state is not None:
+        return intercept_state
 
     await db.save_support_message(user.id, user.username, msg_text)
 
@@ -159,6 +164,12 @@ async def receive_support_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    is_admin = update.effective_user.id in ADMIN_IDS
-    await update.message.reply_text("Action cancelled.", reply_markup=main_menu_keyboard(is_admin))
+    context.user_data.clear()
+    user_id = update.effective_user.id if update.effective_user else 0
+    is_admin = user_id in ADMIN_IDS
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.effective_message.reply_text("Action cancelled.", reply_markup=main_menu_keyboard(is_admin))
+    elif update.message:
+        await update.message.reply_text("Action cancelled.", reply_markup=main_menu_keyboard(is_admin))
     return ConversationHandler.END

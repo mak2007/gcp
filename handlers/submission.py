@@ -1,5 +1,6 @@
 import re
 import logging
+from typing import Optional, Tuple
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
@@ -10,6 +11,8 @@ from keyboards import cancel_keyboard, main_menu_keyboard, admin_submission_acti
 logger = logging.getLogger(__name__)
 
 WAIT_EMAIL, WAIT_PASS, WAIT_KEY, WAIT_CONFIRM = range(4)
+WAIT_SUPPORT_MSG = 101
+WAIT_APPEAL_TEXT = 201
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
@@ -41,26 +44,88 @@ async def start_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<i>(Note: Multiple submissions allowed. Resubmitting the same email requires an 8-hour cooldown.)</i>\n\n"
         "<i>Or press ❌ Cancel anytime to stop.</i>"
     )
-    await update.message.reply_text(
-        intro_text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=cancel_keyboard()
-    )
+    if update.message:
+        await update.message.reply_text(
+            intro_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=cancel_keyboard()
+        )
+    elif update.callback_query:
+        await update.callback_query.answer()
+        await update.effective_message.reply_text(
+            intro_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=cancel_keyboard()
+        )
     return WAIT_EMAIL
+
+async def check_menu_intercept(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    clean = text.strip()
+    user_id = update.effective_user.id if update.effective_user else 0
+    is_admin = user_id in ADMIN_IDS
+
+    if clean in ["📝 Submit Information", "/submit"]:
+        context.user_data.clear()
+        await start_submission(update, context)
+        return WAIT_EMAIL
+    elif clean in ["📊 Check Status & Queue", "/status"]:
+        context.user_data.clear()
+        from handlers.user import check_status_handler
+        await check_status_handler(update, context)
+        return ConversationHandler.END
+    elif clean in ["⚖️ Submit Appeal", "/appeal"]:
+        context.user_data.clear()
+        from handlers.appeal import start_appeal
+        await start_appeal(update, context)
+        return ConversationHandler.END
+    elif clean in ["💬 Support", "/support"]:
+        context.user_data.clear()
+        from handlers.user import support_handler
+        await support_handler(update, context)
+        return WAIT_SUPPORT_MSG
+    elif clean in ["⚙️ Admin Dashboard", "/admin"]:
+        if is_admin:
+            context.user_data.clear()
+            from handlers.admin import admin_dashboard_command
+            await admin_dashboard_command(update, context)
+        return ConversationHandler.END
+    elif clean in ["❌ Cancel", "/cancel"]:
+        context.user_data.clear()
+        if update.message:
+            await update.message.reply_text("Action cancelled.", reply_markup=main_menu_keyboard(is_admin))
+        elif update.callback_query:
+            await update.callback_query.answer()
+            await update.effective_message.reply_text("Action cancelled.", reply_markup=main_menu_keyboard(is_admin))
+        return ConversationHandler.END
+    elif clean == "/start":
+        context.user_data.clear()
+        from handlers.user import start_handler
+        await start_handler(update, context)
+        return ConversationHandler.END
+    return None
+
+def extract_review_details(message_text: str):
+    email_m = re.search(r"Email:\s*([^\n<]+)", message_text)
+    pass_m = re.search(r"PASS:\s*([^\n<]+)", message_text)
+    key_m = re.search(r"Key:\s*([^\n<]+)", message_text)
+    email = email_m.group(1).strip() if email_m else None
+    pass_code = pass_m.group(1).strip() if pass_m else None
+    key_code = key_m.group(1).strip() if key_m else None
+    return email, pass_code, key_code
 
 async def receive_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     email = update.message.text.strip()
     is_admin = update.effective_user.id in ADMIN_IDS
 
-    if email == "❌ Cancel":
-        context.user_data.clear()
-        await update.message.reply_text("Submission cancelled.", reply_markup=main_menu_keyboard(is_admin))
-        return ConversationHandler.END
+    intercept_state = await check_menu_intercept(update, context, email)
+    if intercept_state is not None:
+        return intercept_state
 
     if not EMAIL_REGEX.match(email):
         await update.message.reply_text(
             "⚠️ <b>Invalid Email Format!</b>\n"
-            "Please enter a valid email address (e.g. <code>user@example.com</code>):",
+            "Please enter a valid email address (e.g. <code>user@example.com</code>):\n\n"
+            "<i>(Or send ❌ Cancel to return to main menu)</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=cancel_keyboard()
         )
@@ -70,45 +135,42 @@ async def receive_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Check for existing submission of this email
     existing = await db.get_submission_by_email(clean_email)
-    if existing:
+    if existing and not is_admin:
         can_resub, reason, rem_h, rem_m = db.check_resubmit_eligibility(existing)
         if reason == "ACCEPTED":
             await update.message.reply_text(
-                f"🚫 <b>SUBMISSION REJECTED: ALREADY ACCEPTED</b>\n\n"
+                f"🚫 <b>Email Already Accepted</b>\n\n"
                 f"The email <code>{clean_email}</code> has already been accepted and processed.\n\n"
-                f"Accepted emails cannot be resubmitted.",
+                f"Please enter a <b>different email address</b> (or send ❌ Cancel):",
                 parse_mode=ParseMode.HTML,
-                reply_markup=main_menu_keyboard(is_admin)
+                reply_markup=cancel_keyboard()
             )
-            context.user_data.clear()
-            return ConversationHandler.END
+            return WAIT_EMAIL
 
         if reason == "NOT_UNLOCKED":
             st = existing.get("status", "PENDING")
             await update.message.reply_text(
-                f"🚫 <b>RESUBMISSION NOT PERMITTED</b>\n\n"
-                f"The email <code>{clean_email}</code> is already in our records (Status: <b>{st}</b>).\n\n"
-                f"⚠️ <b>Policy:</b> You cannot resubmit an email unless an admin explicitly unlocks it from their side.\n\n"
-                f"If your submission was disapproved, please use the <b>⚖️ Submit Appeal</b> button to request a review.",
+                f"⚠️ <b>Email Already in Records</b>\n\n"
+                f"The email <code>{clean_email}</code> is already in our system (Status: <b>{st}</b>).\n\n"
+                f"• If you want to submit another account, please enter a different email below.\n"
+                f"• If this submission was disapproved, tap <b>⚖️ Submit Appeal</b> in the menu.\n\n"
+                f"<i>Please enter another email address (or send ❌ Cancel):</i>",
                 parse_mode=ParseMode.HTML,
-                reply_markup=main_menu_keyboard(is_admin)
+                reply_markup=cancel_keyboard()
             )
-            context.user_data.clear()
-            return ConversationHandler.END
+            return WAIT_EMAIL
 
         if reason == "COOLDOWN_ACTIVE":
             unlocked_time = existing.get("resubmit_unlocked_at") or "recently"
             await update.message.reply_text(
-                f"⏱️ <b>8-HOUR POST-UNLOCK COOLDOWN ACTIVE</b>\n\n"
-                f"Admin approved resubmission for <code>{clean_email}</code> on {unlocked_time}.\n\n"
-                f"However, resubmission is only allowed <b>8 hours after admin approval</b>.\n\n"
+                f"⏱️ <b>8-Hour Cooldown Active for this Email</b>\n\n"
+                f"Admin approved resubmission on {unlocked_time}.\n"
                 f"⏳ <b>Time Remaining:</b> <b>{rem_h}h {rem_m}m</b>\n\n"
-                f"Please wait until the cooldown expires before resubmitting.",
+                f"Please enter a <b>different email address</b> to submit another account, or wait for cooldown:",
                 parse_mode=ParseMode.HTML,
-                reply_markup=main_menu_keyboard(is_admin)
+                reply_markup=cancel_keyboard()
             )
-            context.user_data.clear()
-            return ConversationHandler.END
+            return WAIT_EMAIL
 
         # Cooldown passed and admin unlocked!
         context.user_data["resubmitting_id"] = existing["id"]
@@ -123,15 +185,19 @@ async def receive_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return WAIT_PASS
 
-    # Brand new email
-    context.user_data["resubmitting_id"] = None
+    if existing and is_admin:
+        context.user_data["resubmitting_id"] = existing["id"]
+    else:
+        context.user_data["resubmitting_id"] = None
+
     context.user_data["sub_email"] = clean_email
 
     # Step 2: Ask for PASS
     await update.message.reply_text(
         f"✅ Email recorded: <code>{clean_email}</code>\n\n"
         f"🔒 <b>Step 2 of 3: Enter PASS</b>\n"
-        f"Please enter your <b>PASS</b>:",
+        f"Please enter your <b>PASS</b>:\n\n"
+        f"<i>(Or send ❌ Cancel to return to main menu)</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=cancel_keyboard()
     )
@@ -139,23 +205,19 @@ async def receive_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pass_text = update.message.text.strip()
-    is_admin = update.effective_user.id in ADMIN_IDS
-
-    if pass_text == "❌ Cancel":
-        context.user_data.clear()
-        await update.message.reply_text("Submission cancelled.", reply_markup=main_menu_keyboard(is_admin))
-        return ConversationHandler.END
+    intercept_state = await check_menu_intercept(update, context, pass_text)
+    if intercept_state is not None:
+        return intercept_state
 
     if len(pass_text) < 1 or len(pass_text) > 100:
         await update.message.reply_text(
-            "⚠️ Please enter a valid PASS:",
+            "⚠️ PASS cannot be empty or longer than 100 characters. Please re-enter (or send ❌ Cancel):",
             reply_markup=cancel_keyboard()
         )
         return WAIT_PASS
 
     context.user_data["sub_pass"] = pass_text
 
-    # Step 3: Ask for Key + Help Button + Video tutorial
     support_h = await db.get_support_handle()
     video_u = await db.get_video_url()
     await update.message.reply_text(
@@ -170,18 +232,15 @@ async def receive_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key_text = update.message.text.strip()
-    is_admin = update.effective_user.id in ADMIN_IDS
-
-    if key_text == "❌ Cancel":
-        context.user_data.clear()
-        await update.message.reply_text("Submission cancelled.", reply_markup=main_menu_keyboard(is_admin))
-        return ConversationHandler.END
+    intercept_state = await check_menu_intercept(update, context, key_text)
+    if intercept_state is not None:
+        return intercept_state
 
     if len(key_text) < 1 or len(key_text) > 100:
         support_h = await db.get_support_handle()
         video_u = await db.get_video_url()
         await update.message.reply_text(
-            "⚠️ Please enter a valid Key:",
+            "⚠️ Please enter a valid Key (or send ❌ Cancel):",
             reply_markup=key_help_keyboard(support_h, video_u)
         )
         return WAIT_KEY
@@ -192,7 +251,6 @@ async def receive_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pass_code = context.user_data.get("sub_pass")
     key_code = key_text
 
-    # Step 4: Show Review & Confirmation with Confirm, Start Over, or Cancel buttons
     review_card = (
         "📋 <b>Please Review Your Details Before Submitting:</b>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -212,35 +270,16 @@ async def receive_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return WAIT_CONFIRM
 
-async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user = update.effective_user
+async def process_submission_commit(
+    user,
+    email: str,
+    pass_code: str,
+    key_code: str,
+    resub_id: Optional[int],
+    bot,
+    target_message=None
+):
     is_admin = user.id in ADMIN_IDS
-
-    email = context.user_data.get("sub_email")
-    pass_code = context.user_data.get("sub_pass")
-    key_code = context.user_data.get("sub_key")
-
-    if not email or not pass_code or not key_code:
-        await query.edit_message_text(
-            "⚠️ Session expired or missing details. Please click 📝 Submit Information to try again.",
-            reply_markup=None
-        )
-        context.user_data.clear()
-        return ConversationHandler.END
-
-    resub_id = context.user_data.get("resubmitting_id")
-
-    # Final duplicate email check before commit (exclude existing submission if resubmitting)
-    is_dup = await db.is_email_registered(email, exclude_submission_id=resub_id)
-    if is_dup:
-        await query.edit_message_text(
-            f"🚫 <b>Duplicate Email Detected:</b> <code>{email}</code> was already registered. Submission cancelled.",
-            parse_mode=ParseMode.HTML
-        )
-        context.user_data.clear()
-        return ConversationHandler.END
 
     # Save to database (update if resubmission, else create new)
     if resub_id:
@@ -264,9 +303,6 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     submitted_date = submission_obj["created_at"]
     resub_date = submission_obj.get("resubmitted_at") or submission_obj.get("updated_at")
 
-    context.user_data.clear()
-
-    # Success confirmation message to User
     logout_notice = (
         "━━━━━━━━━━━━━━━━━━━\n"
         "⚠️ <b>ACTION REQUIRED: PLEASE LOG OUT NOW!</b>\n"
@@ -316,12 +352,16 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             f"2. Once accepted, you will receive payment instructions.\n"
             f"3. You can track your position anytime using the <b>📊 Check Status & Queue</b> button."
         )
-    await query.edit_message_text(
-        user_confirm,
-        parse_mode=ParseMode.HTML
-    )
 
-    await context.bot.send_message(
+    if target_message:
+        try:
+            await target_message.edit_text(user_confirm, parse_mode=ParseMode.HTML)
+        except Exception:
+            await bot.send_message(chat_id=user.id, text=user_confirm, parse_mode=ParseMode.HTML)
+    else:
+        await bot.send_message(chat_id=user.id, text=user_confirm, parse_mode=ParseMode.HTML)
+
+    await bot.send_message(
         chat_id=user.id,
         text="👇 Use the menu below to check your status or submit another:",
         reply_markup=main_menu_keyboard(is_admin)
@@ -358,7 +398,7 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
     for admin_id in ADMIN_IDS:
         try:
-            await context.bot.send_message(
+            await bot.send_message(
                 chat_id=admin_id,
                 text=admin_alert,
                 parse_mode=ParseMode.HTML,
@@ -367,7 +407,78 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception as e:
             logger.error(f"Failed to notify admin {admin_id}: {e}")
 
+async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+    email = context.user_data.get("sub_email")
+    pass_code = context.user_data.get("sub_pass")
+    key_code = context.user_data.get("sub_key")
+    resub_id = context.user_data.get("resubmitting_id")
+
+    if not email or not pass_code or not key_code:
+        if query.message and query.message.text:
+            parsed_e, parsed_p, parsed_k = extract_review_details(query.message.text)
+            email = email or parsed_e
+            pass_code = pass_code or parsed_p
+            key_code = key_code or parsed_k
+
+    if not email or not pass_code or not key_code:
+        await query.edit_message_text(
+            "⚠️ Session details could not be retrieved. Please click 📝 Submit Information to enter details.",
+            reply_markup=None
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    context.user_data.clear()
+    await process_submission_commit(user, email, pass_code, key_code, resub_id, context.bot, target_message=query.message)
     return ConversationHandler.END
+
+async def receive_confirm_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw_text = update.message.text.strip()
+    intercept_state = await check_menu_intercept(update, context, raw_text)
+    if intercept_state is not None:
+        return intercept_state
+
+    low = raw_text.lower()
+    user = update.effective_user
+    is_admin = user.id in ADMIN_IDS
+
+    if any(k in low for k in ["confirm", "yes", "ok", "submit", "done", "logged out"]):
+        email = context.user_data.get("sub_email")
+        pass_code = context.user_data.get("sub_pass")
+        key_code = context.user_data.get("sub_key")
+        resub_id = context.user_data.get("resubmitting_id")
+        if not email or not pass_code or not key_code:
+            await update.message.reply_text(
+                "⚠️ Details missing or session expired. Please tap 📝 Submit Information to start over.",
+                reply_markup=main_menu_keyboard(is_admin)
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
+
+        context.user_data.clear()
+        await process_submission_commit(user, email, pass_code, key_code, resub_id, context.bot)
+        return ConversationHandler.END
+
+    elif any(k in low for k in ["cancel", "no", "stop", "abort"]):
+        context.user_data.clear()
+        await update.message.reply_text("Submission cancelled.", reply_markup=main_menu_keyboard(is_admin))
+        return ConversationHandler.END
+
+    elif any(k in low for k in ["edit", "restart", "start over"]):
+        context.user_data.clear()
+        await start_submission(update, context)
+        return WAIT_EMAIL
+
+    else:
+        await update.message.reply_text(
+            "👉 Please tap <b>✅ I Have Logged Out — Confirm & Submit</b> or <b>🔄 Start Over / Edit</b> below to finish:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=review_confirm_keyboard()
+        )
+        return WAIT_CONFIRM
 
 async def sub_restart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query

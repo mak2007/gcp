@@ -35,6 +35,7 @@ from handlers.submission import (
     receive_email,
     receive_pass,
     receive_key,
+    receive_confirm_text,
     sub_confirm_callback,
     sub_restart_callback,
     sub_cancel_callback,
@@ -68,6 +69,9 @@ from handlers.admin import (
     admin_export_txt_callback,
     admin_export_txt_command,
     admin_search_command,
+    admin_search_prompt_callback,
+    receive_admin_search_query,
+    WAIT_ADMIN_SEARCH,
     admin_broadcast_prompt_callback,
     receive_broadcast_text,
     admin_broadcast_do_callback,
@@ -119,12 +123,30 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
 
-    # 1. Submission Conversation Handler
-    submission_conv = ConversationHandler(
+    COMMON_FALLBACKS = [
+        MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
+        CommandHandler("cancel", cancel_conversation),
+        CommandHandler("start", start_handler),
+        MessageHandler(filters.Regex("^📊 Check Status & Queue$"), check_status_handler),
+        CommandHandler("status", check_status_handler),
+        MessageHandler(filters.Regex("^⚙️ Admin Dashboard$"), admin_dashboard_command),
+        CommandHandler("admin", admin_dashboard_command),
+    ]
+
+    # 1. Unified User Flow Conversation Handler (Submissions, Appeals, Support)
+    user_conv = ConversationHandler(
         entry_points=[
+            # Submissions
             MessageHandler(filters.Regex("^📝 Submit Information$"), start_submission),
             CommandHandler("submit", start_submission),
-            CallbackQueryHandler(start_resubmission_from_appeal, pattern=r"^usr_start_resub:\d+$")
+            CallbackQueryHandler(start_resubmission_from_appeal, pattern=r"^usr_start_resub:\d+$"),
+            # Appeals
+            MessageHandler(filters.Regex("^⚖️ Submit Appeal$"), start_appeal),
+            CommandHandler("appeal", start_appeal),
+            CallbackQueryHandler(appeal_select_callback, pattern=r"^usr_start_appeal:\d+$"),
+            # Support
+            MessageHandler(filters.Regex("^💬 Support$"), support_handler),
+            CommandHandler("support", support_handler),
         ],
         states={
             WAIT_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_email)],
@@ -133,56 +155,22 @@ def main():
             WAIT_CONFIRM: [
                 CallbackQueryHandler(sub_confirm_callback, pattern=r"^sub_confirm$"),
                 CallbackQueryHandler(sub_restart_callback, pattern=r"^sub_restart$"),
-                CallbackQueryHandler(sub_cancel_callback, pattern=r"^sub_cancel$")
-            ]
+                CallbackQueryHandler(sub_cancel_callback, pattern=r"^sub_cancel$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_confirm_text)
+            ],
+            WAIT_APPEAL_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_appeal_text)
+            ],
+            WAIT_SUPPORT_MSG: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_support_msg)
+            ],
         },
-        fallbacks=[
-            MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation),
-            CommandHandler("start", start_handler)
-        ],
+        fallbacks=COMMON_FALLBACKS,
         allow_reentry=True
     )
-    app.add_handler(submission_conv)
+    app.add_handler(user_conv)
 
-    # 2. Appeal Conversation Handler
-    appeal_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex("^⚖️ Submit Appeal$"), start_appeal),
-            CommandHandler("appeal", start_appeal),
-            CallbackQueryHandler(appeal_select_callback, pattern=r"^usr_start_appeal:\d+$")
-        ],
-        states={
-            WAIT_APPEAL_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_appeal_text)],
-        },
-        fallbacks=[
-            MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation),
-            CommandHandler("start", start_handler)
-        ],
-        allow_reentry=True
-    )
-    app.add_handler(appeal_conv)
-
-    # 3. Support Conversation Handler
-    support_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex("^💬 Support$"), support_handler),
-            CommandHandler("support", support_handler)
-        ],
-        states={
-            WAIT_SUPPORT_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_support_msg)],
-        },
-        fallbacks=[
-            MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation),
-            CommandHandler("start", start_handler)
-        ],
-        allow_reentry=True
-    )
-    app.add_handler(support_conv)
-
-    # 4. Admin Broadcast Conversation Handler
+    # 2. Admin Broadcast Conversation Handler
     broadcast_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(admin_broadcast_prompt_callback, pattern=r"^adm_broadcast_prompt$")
@@ -190,15 +178,12 @@ def main():
         states={
             WAIT_ADMIN_BROADCAST: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_broadcast_text)],
         },
-        fallbacks=[
-            MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation)
-        ],
+        fallbacks=COMMON_FALLBACKS,
         allow_reentry=True
     )
     app.add_handler(broadcast_conv)
 
-    # 5. Admin Custom Batch TXT Conversation Handler
+    # 3. Admin Custom Batch TXT Conversation Handler
     batch_txt_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(admin_req_txt_prompt_callback, pattern=r"^adm_req_txt_prompt$")
@@ -206,15 +191,12 @@ def main():
         states={
             WAIT_ADMIN_BATCH_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_admin_batch_count)],
         },
-        fallbacks=[
-            MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation)
-        ],
+        fallbacks=COMMON_FALLBACKS,
         allow_reentry=True
     )
     app.add_handler(batch_txt_conv)
 
-    # 6. Admin Settings Conversation Handler
+    # 4. Admin Settings Conversation Handler
     settings_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(admin_set_prompt_callback, pattern=r"^adm_set:")
@@ -222,13 +204,23 @@ def main():
         states={
             WAIT_ADMIN_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_admin_setting_value)],
         },
-        fallbacks=[
-            MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation)
-        ],
+        fallbacks=COMMON_FALLBACKS,
         allow_reentry=True
     )
     app.add_handler(settings_conv)
+
+    # 5. Admin Search Conversation Handler
+    search_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(admin_search_prompt_callback, pattern=r"^adm_search_prompt$")
+        ],
+        states={
+            WAIT_ADMIN_SEARCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_admin_search_query)],
+        },
+        fallbacks=COMMON_FALLBACKS,
+        allow_reentry=True
+    )
+    app.add_handler(search_conv)
 
     # 7. Standard Commands & Buttons
     app.add_handler(CommandHandler("start", start_handler))

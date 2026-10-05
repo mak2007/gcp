@@ -108,9 +108,10 @@ async def receive_appeal_text(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = update.message.text.strip()
     is_admin = user.id in ADMIN_IDS
 
-    if text == "❌ Cancel":
-        await update.message.reply_text("Appeal cancelled.", reply_markup=main_menu_keyboard(is_admin))
-        return ConversationHandler.END
+    from handlers.submission import check_menu_intercept
+    intercept_state = await check_menu_intercept(update, context, text)
+    if intercept_state is not None:
+        return intercept_state
 
     if len(text) < 5:
         await update.message.reply_text(

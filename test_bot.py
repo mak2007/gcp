@@ -272,11 +272,67 @@ async def run_tests():
     assert any(s["id"] == dis_sub_id for s in disapproved_list), "Disapproved submission must appear in DISAPPROVED category"
     print("✅ Category isolation (Approved vs Disapproved) verified.")
 
+    # 17. Test Multi-field Submissions Search (Email, PASS, Key)
+    search_sub_id = await db.create_submission(9993, "search_user", "searchtest@test.com", "SECRET_PASS_XYZ", "SECRET_KEY_ABC")
+    s_search_email = await db.search_submissions("searchtest@test.com")
+    assert any(s["id"] == search_sub_id for s in s_search_email), "Search by email must succeed"
+    s_search_pass = await db.search_submissions("SECRET_PASS_XYZ")
+    assert any(s["id"] == search_sub_id for s in s_search_pass), "Search by PASS must succeed"
+    s_search_key = await db.search_submissions("SECRET_KEY_ABC")
+    assert any(s["id"] == search_sub_id for s in s_search_key), "Search by Key must succeed"
+    print("✅ Search submissions by email, PASS, and Key verified.")
+
+    # 18. Test Menu Intercept State Transitions
+    from handlers.submission import check_menu_intercept, extract_review_details, WAIT_EMAIL, WAIT_SUPPORT_MSG
+    from telegram.ext import ConversationHandler
+    class DummyUser:
+        id = 111
+        username = "dummy"
+    class DummyMessage:
+        text = ""
+        async def reply_text(self, *args, **kwargs): pass
+    class DummyUpdate:
+        effective_user = DummyUser()
+        message = DummyMessage()
+        callback_query = None
+    class DummyContext:
+        user_data = {"sub_email": "foo@example.com"}
+
+    u = DummyUpdate()
+    c = DummyContext()
+
+    res_sub = await check_menu_intercept(u, c, "📝 Submit Information")
+    assert res_sub == WAIT_EMAIL, f"Expected WAIT_EMAIL, got {res_sub}"
+    assert len(c.user_data) == 0, "user_data must be cleared on submit re-entry"
+
+    res_supp = await check_menu_intercept(u, c, "💬 Support")
+    assert res_supp == WAIT_SUPPORT_MSG, f"Expected WAIT_SUPPORT_MSG, got {res_supp}"
+
+    res_stat = await check_menu_intercept(u, c, "📊 Check Status & Queue")
+    assert res_stat == ConversationHandler.END, "Expected ConversationHandler.END on status"
+
+    res_canc = await check_menu_intercept(u, c, "❌ Cancel")
+    assert res_canc == ConversationHandler.END, "Expected ConversationHandler.END on cancel"
+    print("✅ Menu interception and conversation transition state verification passed.")
+
+    # 19. Test Review Text Parsing & Resilient Dual Confirmation
+    sample_review = (
+        "📋 Please Review Your Submission:\n\n"
+        "📧 Email: fallback@example.com\n"
+        "🔒 PASS: MY_PASS_999\n"
+        "🔑 Key: MY_KEY_888\n"
+    )
+    e_p, p_p, k_p = extract_review_details(sample_review)
+    assert e_p == "fallback@example.com"
+    assert p_p == "MY_PASS_999"
+    assert k_p == "MY_KEY_888"
+    print("✅ Review details extraction fallback verified.")
+
     # Cleanup test db
     if os.path.exists("test_bot.sqlite"):
         os.remove("test_bot.sqlite")
 
-    print("\n🎉 ALL 16 TEST SUITES PASSED PERFECTLY!")
+    print("\n🎉 ALL 19 TEST SUITES PASSED PERFECTLY!")
 
 if __name__ == "__main__":
     asyncio.run(run_tests())

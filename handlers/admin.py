@@ -88,6 +88,7 @@ async def admin_dashboard_command(update: Update, context: ContextTypes.DEFAULT_
             parse_mode=ParseMode.HTML,
             reply_markup=admin_dashboard_keyboard()
         )
+    return ConversationHandler.END
 
 async def admin_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -837,8 +838,9 @@ async def receive_admin_batch_count(update: Update, context: ContextTypes.DEFAUL
         return ConversationHandler.END
 
     msg_text = update.message.text.strip()
-    if msg_text == "❌ Cancel":
-        await update.message.reply_text("Batch TXT export cancelled.")
+    from handlers.submission import check_menu_intercept
+    intercept_state = await check_menu_intercept(update, context, msg_text)
+    if intercept_state is not None:
         return ConversationHandler.END
 
     if not msg_text.isdigit() or int(msg_text) <= 0:
@@ -882,6 +884,57 @@ async def admin_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
 
+async def admin_search_prompt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return ConversationHandler.END
+
+    await query.message.reply_text(
+        "🔎 <b>Search Submissions</b>\n\n"
+        "Please enter an <b>Email</b>, <b>PASS</b>, or <b>Key</b> to search:\n\n"
+        "<i>(Or send ❌ Cancel to abort)</i>",
+        parse_mode=ParseMode.HTML
+    )
+    return WAIT_ADMIN_SEARCH
+
+async def receive_admin_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+
+    query_str = update.message.text.strip()
+    from handlers.submission import check_menu_intercept
+    intercept_state = await check_menu_intercept(update, context, query_str)
+    if intercept_state is not None:
+        return ConversationHandler.END
+
+    results = await db.search_submissions(query_str)
+    if not results:
+        await update.message.reply_text(
+            f"ℹ️ No submissions found matching '<code>{query_str}</code>'.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]])
+        )
+        return ConversationHandler.END
+
+    text = f"🔎 <b>Search Results for '{query_str}' ({len(results)} found):</b>\n━━━━━━━━━━━━━━━━━━━\n"
+    kb = []
+    for item in results:
+        pass_val = item.get("pass_code") or item.get("full_name") or "N/A"
+        key_val = item.get("key_code") or item.get("unique_code") or "N/A"
+        text += (
+            f"• <b>#{item['id']}</b> | <code>{item['email']}</code>\n"
+            f"  PASS: <code>{pass_val}</code> | Key: <code>{key_val}</code>\n"
+            f"  Status: <b>{item['status']}</b> | Date: {item['created_at']}\n\n"
+        )
+        kb.append([
+            InlineKeyboardButton(f"👉 Manage #{item['id']} ({item['email'][:16]})", callback_data=f"adm_view:{item['id']}")
+        ])
+    kb.append([InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")])
+
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
+    return ConversationHandler.END
+
 WAIT_ADMIN_BROADCAST = 302
 
 async def admin_broadcast_prompt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -906,8 +959,9 @@ async def receive_broadcast_text(update: Update, context: ContextTypes.DEFAULT_T
         return ConversationHandler.END
 
     msg_text = update.message.text.strip()
-    if msg_text == "❌ Cancel":
-        await update.message.reply_text("Announcement broadcast cancelled.")
+    from handlers.submission import check_menu_intercept
+    intercept_state = await check_menu_intercept(update, context, msg_text)
+    if intercept_state is not None:
         return ConversationHandler.END
 
     count = await db.get_total_users_count()
@@ -1078,8 +1132,9 @@ async def receive_admin_setting_value(update: Update, context: ContextTypes.DEFA
         return ConversationHandler.END
 
     raw_val = update.message.text.strip()
-    if raw_val in ["❌ Cancel", "/cancel"]:
-        await update.message.reply_text("❌ Update cancelled.")
+    from handlers.submission import check_menu_intercept
+    intercept_state = await check_menu_intercept(update, context, raw_val)
+    if intercept_state is not None:
         return ConversationHandler.END
 
     target_key = context.user_data.get("admin_setting_target")

@@ -5,6 +5,9 @@ from config import DB_PATH
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA journal_mode=WAL;")
+        await db.execute("PRAGMA busy_timeout = 5000;")
+        await db.execute("PRAGMA synchronous = NORMAL;")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS submissions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,15 +219,34 @@ async def create_submission(user_id: int, username: Optional[str], email: str, p
     ts = now_iso()
     clean_email = email.strip().lower()
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            """
-            INSERT INTO submissions (user_id, username, full_name, email, unique_code, pass_code, key_code, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)
-            """,
-            (user_id, username, pass_code.strip(), clean_email, key_code.strip(), pass_code.strip(), key_code.strip(), ts, ts)
-        )
-        await db.commit()
-        return cursor.lastrowid
+        try:
+            cursor = await db.execute(
+                """
+                INSERT INTO submissions (user_id, username, full_name, email, unique_code, pass_code, key_code, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)
+                """,
+                (user_id, username, pass_code.strip(), clean_email, key_code.strip(), pass_code.strip(), key_code.strip(), ts, ts)
+            )
+            await db.commit()
+            return cursor.lastrowid
+        except Exception:
+            # If an existing record exists for this email, update it with the new credentials
+            cursor = await db.execute("SELECT id FROM submissions WHERE LOWER(email) = ?", (clean_email,))
+            row = await cursor.fetchone()
+            if row:
+                sub_id = row[0]
+                await db.execute(
+                    """
+                    UPDATE submissions 
+                    SET user_id = ?, username = ?, full_name = ?, unique_code = ?, pass_code = ?, key_code = ?, 
+                        status = 'PENDING', admin_notes = NULL, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (user_id, username, pass_code.strip(), key_code.strip(), pass_code.strip(), key_code.strip(), ts, sub_id)
+                )
+                await db.commit()
+                return sub_id
+            raise
 
 async def update_submission_resubmit(submission_id: int, email: str, pass_code: str, key_code: str) -> None:
     ts = now_iso()
@@ -388,24 +410,37 @@ async def get_submissions_by_status(status: str, limit: int = 10, offset: int = 
         return [dict(r) for r in rows]
 
 async def get_submissions_batch(limit: int = 5, status: Optional[str] = "PENDING") -> List[Dict[str, Any]]:
-    """Gets up to 'limit' submissions from pool (prioritizing 'status' if specified)."""
+    """Gets up to 'limit' submissions from pool (prioritizing 'status' if specified, filling from general pool if needed)."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        results = []
         if status:
             cursor = await db.execute(
                 "SELECT * FROM submissions WHERE status = ? ORDER BY id ASC LIMIT ?",
                 (status, limit)
             )
             rows = await cursor.fetchall()
-            if rows:
-                return [dict(r) for r in rows]
-        # Fallback to any submissions if not enough of the given status
-        cursor = await db.execute(
-            "SELECT * FROM submissions ORDER BY id ASC LIMIT ?",
-            (limit,)
-        )
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+            results.extend([dict(r) for r in rows])
+
+        # If we need more to reach limit, fill from other submissions
+        if len(results) < limit:
+            remaining = limit - len(results)
+            exclude_ids = [r["id"] for r in results]
+            if exclude_ids:
+                placeholders = ",".join(["?"] * len(exclude_ids))
+                cursor = await db.execute(
+                    f"SELECT * FROM submissions WHERE id NOT IN ({placeholders}) ORDER BY id ASC LIMIT ?",
+                    (*exclude_ids, remaining)
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT * FROM submissions ORDER BY id ASC LIMIT ?",
+                    (remaining,)
+                )
+            rows = await cursor.fetchall()
+            results.extend([dict(r) for r in rows])
+
+        return results
 
 async def get_user_eligible_resubmissions(user_id: int) -> List[Dict[str, Any]]:
     """Gets submissions for this user that were unlocked by admin (status == 'CAN_RESUBMIT')."""
@@ -436,10 +471,14 @@ async def search_submissions(query: str) -> List[Dict[str, Any]]:
         cursor = await db.execute(
             """
             SELECT * FROM submissions 
-            WHERE LOWER(email) LIKE ? OR LOWER(unique_code) LIKE ? OR LOWER(full_name) LIKE ?
+            WHERE LOWER(email) LIKE ? 
+               OR LOWER(unique_code) LIKE ? 
+               OR LOWER(full_name) LIKE ?
+               OR LOWER(COALESCE(pass_code, '')) LIKE ?
+               OR LOWER(COALESCE(key_code, '')) LIKE ?
             ORDER BY id DESC LIMIT 10
             """,
-            (clean, clean, clean)
+            (clean, clean, clean, clean, clean)
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]

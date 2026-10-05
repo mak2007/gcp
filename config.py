@@ -33,7 +33,11 @@ ADMIN_IDS: List[int] = [
 ]
 
 SUPPORT_HANDLE: str = get_env_flexible("SUPPORT_HANDLE", "@LALAJIIIIIIIIII")
-DB_PATH: str = get_env_flexible("DB_PATH", "bot_database.sqlite")
+raw_db_path = get_env_flexible("DB_PATH", "bot_database.sqlite")
+if not os.path.isabs(raw_db_path):
+    DB_PATH: str = os.path.abspath(os.path.join(os.path.dirname(__file__), raw_db_path))
+else:
+    DB_PATH: str = raw_db_path
 REQUIRED_CHANNEL: str = get_env_flexible("REQUIRED_CHANNEL", "https://t.me/LALAJIIIIIIIIII")
 TUTORIAL_VIDEO_URL: str = get_env_flexible("TUTORIAL_VIDEO_URL", "https://t.me/LALAJIIIIIIIIII")
 
