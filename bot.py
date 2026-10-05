@@ -30,12 +30,12 @@ from handlers.user import (
 )
 from handlers.submission import (
     start_submission,
-    receive_name,
     receive_email,
-    receive_code,
-    WAIT_NAME,
+    receive_pass,
+    receive_key,
     WAIT_EMAIL,
-    WAIT_CODE
+    WAIT_PASS,
+    WAIT_KEY
 )
 from handlers.appeal import (
     start_appeal,
@@ -105,9 +105,9 @@ def main():
             CommandHandler("submit", start_submission)
         ],
         states={
-            WAIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)],
             WAIT_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_email)],
-            WAIT_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_code)],
+            WAIT_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_pass)],
+            WAIT_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_key)],
         },
         fallbacks=[
             MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),

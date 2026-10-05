@@ -28,9 +28,9 @@ async def run_tests():
     sub1_id = await db.create_submission(
         user_id=111,
         username="user_one",
-        full_name="Alice Smith",
         email=email1,
-        unique_code="CODE123"
+        pass_code="PASS123",
+        key_code="KEY123"
     )
     print(f"✅ Created submission #1 (ID: {sub1_id})")
 
@@ -46,18 +46,18 @@ async def run_tests():
         await db.create_submission(
             user_id=100 + i,
             username=f"user_{i}",
-            full_name=f"User {i}",
             email=f"user{i}@example.com",
-            unique_code=f"CODE_{i}"
+            pass_code=f"PASS_{i}",
+            key_code=f"KEY_{i}"
         )
 
     # Now create the 11th user after 10 people
     sub11_id = await db.create_submission(
         user_id=999,
         username="user_eleven",
-        full_name="Bob Eleventh",
         email="bob11@example.com",
-        unique_code="CODE_ELEVEN"
+        pass_code="BOB_PASS",
+        key_code="BOB_KEY"
     )
 
     q_info = await db.get_queue_info(sub11_id)
@@ -88,19 +88,20 @@ async def run_tests():
     sub_resubmit = await db.create_submission(
         user_id=555,
         username="resubmitter",
-        full_name="Charlie Brown",
         email="charlie@example.com",
-        unique_code="OLD_CODE"
+        pass_code="OLD_PASS",
+        key_code="OLD_KEY"
     )
     await db.update_submission_status(sub_resubmit, "CAN_RESUBMIT", "Code was invalid")
     check_sub = await db.get_submission_by_id(sub_resubmit)
     assert check_sub["status"] == "CAN_RESUBMIT"
 
     # User resubmits with new code and email
-    await db.update_submission_resubmit(sub_resubmit, "Charlie Brown", "charlie_new@example.com", "NEW_CODE_999")
+    await db.update_submission_resubmit(sub_resubmit, "charlie_new@example.com", "NEW_PASS_999", "NEW_KEY_999")
     re_sub = await db.get_submission_by_id(sub_resubmit)
     assert re_sub["status"] == "PENDING"
-    assert re_sub["unique_code"] == "NEW_CODE_999"
+    assert re_sub["pass_code"] == "NEW_PASS_999"
+    assert re_sub["key_code"] == "NEW_KEY_999"
     assert re_sub["email"] == "charlie_new@example.com"
     print("✅ Resubmission flow passed.")
 

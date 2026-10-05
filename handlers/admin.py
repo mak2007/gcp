@@ -21,13 +21,16 @@ def format_admin_submission_card(sub: dict, queue_info: dict = None) -> str:
         "CAN_RESUBMIT": "🔄 CAN RESUBMIT"
     }
     status_str = status_emoji_map.get(sub["status"], sub["status"])
+    pass_val = sub.get("pass_code") or sub.get("full_name") or "N/A"
+    key_val = sub.get("key_code") or sub.get("unique_code") or "N/A"
     text = (
-        f"📋 <b>Submission Details #{sub['id']}</b>\n"
+        f"📋 <b>Recyclable Submission #{sub['id']}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 <b>Name:</b> {sub['full_name']}\n"
         f"💬 <b>Telegram:</b> @{sub.get('username') or 'None'} (ID: <code>{sub['user_id']}</code>)\n"
         f"📧 <b>Email:</b> <code>{sub['email']}</code>\n"
-        f"🔑 <b>Unique Code:</b> <code>{sub['unique_code']}</code>\n"
+        f"🔒 <b>PASS:</b> <code>{pass_val}</code>\n"
+        f"🔑 <b>Key:</b> <code>{key_val}</code>\n"
+        f"💰 <b>Estimated Payout:</b> <b>₹370</b>\n"
         f"📅 <b>Submitted Date:</b> {sub['created_at']}\n"
         f"📊 <b>Status:</b> <b>{status_str}</b>\n"
     )

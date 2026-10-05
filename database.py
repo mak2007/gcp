@@ -57,6 +57,13 @@ async def init_db():
             );
         """)
 
+        # Backward-compatible columns for PASS and Key
+        for col in ["pass_code", "key_code"]:
+            try:
+                await db.execute(f"ALTER TABLE submissions ADD COLUMN {col} TEXT;")
+            except Exception:
+                pass
+
         await db.commit()
 
 def now_iso() -> str:
@@ -100,31 +107,31 @@ async def get_submission_by_id(submission_id: int) -> Optional[Dict[str, Any]]:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
-async def create_submission(user_id: int, username: Optional[str], full_name: str, email: str, unique_code: str) -> int:
+async def create_submission(user_id: int, username: Optional[str], email: str, pass_code: str, key_code: str) -> int:
     ts = now_iso()
     clean_email = email.strip().lower()
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             """
-            INSERT INTO submissions (user_id, username, full_name, email, unique_code, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)
+            INSERT INTO submissions (user_id, username, full_name, email, unique_code, pass_code, key_code, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)
             """,
-            (user_id, username, full_name.strip(), clean_email, unique_code.strip(), ts, ts)
+            (user_id, username, pass_code.strip(), clean_email, key_code.strip(), pass_code.strip(), key_code.strip(), ts, ts)
         )
         await db.commit()
         return cursor.lastrowid
 
-async def update_submission_resubmit(submission_id: int, full_name: str, email: str, unique_code: str) -> None:
+async def update_submission_resubmit(submission_id: int, email: str, pass_code: str, key_code: str) -> None:
     ts = now_iso()
     clean_email = email.strip().lower()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
             UPDATE submissions
-            SET full_name = ?, email = ?, unique_code = ?, status = 'PENDING', admin_notes = NULL, updated_at = ?
+            SET email = ?, full_name = ?, unique_code = ?, pass_code = ?, key_code = ?, status = 'PENDING', admin_notes = NULL, updated_at = ?
             WHERE id = ?
             """,
-            (full_name.strip(), clean_email, unique_code.strip(), ts, submission_id)
+            (clean_email, pass_code.strip(), key_code.strip(), pass_code.strip(), key_code.strip(), ts, submission_id)
         )
         await db.commit()
 
