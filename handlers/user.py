@@ -22,13 +22,12 @@ def format_status_text(submission: dict, queue_info: dict = None) -> str:
     key_val = submission.get("key_code") or submission.get("unique_code") or "N/A"
     
     text = (
-        f"📋 <b>Your Recyclable Submission Details</b>\n"
+        f"📋 <b>Your Submission Details</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"🆔 <b>Submission ID:</b> #{submission['id']}\n"
         f"📧 <b>Email:</b> <code>{submission['email']}</code>\n"
         f"🔒 <b>PASS:</b> <code>{pass_val}</code>\n"
         f"🔑 <b>Key:</b> <code>{key_val}</code>\n"
-        f"💰 <b>Rate of Refund:</b> <b>₹370</b>\n"
         f"📅 <b>Submitted Date:</b> {submission['created_at']}\n"
         f"📊 <b>Current Status:</b> <b>{status_str}</b>\n"
     )
@@ -59,8 +58,7 @@ def format_status_text(submission: dict, queue_info: dict = None) -> str:
     elif status == "ACCEPTED":
         text += (
             "🎉 <b>Congratulations!</b>\n"
-            "status changed to accepted your payment will be made soon\n"
-            "💰 <b>Estimated Payout:</b> <b>₹370</b> ✨"
+            "status changed to accepted your payment will be made soon ✨"
         )
     elif status == "DISAPPROVED":
         text += (
@@ -86,8 +84,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db.register_user(user.id, user.username, user.first_name)
 
     welcome_text = (
-        f"👋 Hello <b>{user.first_name}</b>, welcome to the <b>Recyclable Submission Program</b>!\n\n"
-        f"💰 <b>Rate of Refund:</b> You can potentially get <b>₹370</b> per submission!\n\n"
+        f"👋 <b>Welcome to Madcorn Bot!</b>\n\n"
         f"📌 <b>Available Options:</b>\n"
         f"• <b>📝 Submit Information:</b> Submit your Email, PASS, and Key.\n"
         f"• <b>📊 Check Status & Queue:</b> View your submission date, current status, and queue number.\n"

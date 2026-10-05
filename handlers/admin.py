@@ -30,7 +30,6 @@ def format_admin_submission_card(sub: dict, queue_info: dict = None) -> str:
         f"📧 <b>Email:</b> <code>{sub['email']}</code>\n"
         f"🔒 <b>PASS:</b> <code>{pass_val}</code>\n"
         f"🔑 <b>Key:</b> <code>{key_val}</code>\n"
-        f"💰 <b>Estimated Payout:</b> <b>₹370</b>\n"
         f"📅 <b>Submitted Date:</b> {sub['created_at']}\n"
         f"📊 <b>Status:</b> <b>{status_str}</b>\n"
     )
@@ -216,7 +215,6 @@ async def admin_change_status_callback(update: Update, context: ContextTypes.DEF
             f"status changed to accepted your payment will be made soon\n\n"
             f"🆔 <b>Submission ID:</b> #{sub_id}\n"
             f"📧 <b>Email:</b> <code>{sub['email']}</code>\n"
-            f"💰 <b>Payout Amount:</b> <b>₹370</b>\n"
             f"📅 <b>Submitted Date:</b> {sub['created_at']}"
         )
         try:

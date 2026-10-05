@@ -33,9 +33,13 @@ from handlers.submission import (
     receive_email,
     receive_pass,
     receive_key,
+    sub_confirm_callback,
+    sub_restart_callback,
+    sub_cancel_callback,
     WAIT_EMAIL,
     WAIT_PASS,
-    WAIT_KEY
+    WAIT_KEY,
+    WAIT_CONFIRM
 )
 from handlers.appeal import (
     start_appeal,
@@ -108,6 +112,11 @@ def main():
             WAIT_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_email)],
             WAIT_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_pass)],
             WAIT_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_key)],
+            WAIT_CONFIRM: [
+                CallbackQueryHandler(sub_confirm_callback, pattern=r"^sub_confirm$"),
+                CallbackQueryHandler(sub_restart_callback, pattern=r"^sub_restart$"),
+                CallbackQueryHandler(sub_cancel_callback, pattern=r"^sub_cancel$")
+            ]
         },
         fallbacks=[
             MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
