@@ -24,7 +24,7 @@ def key_help_keyboard(support_handle: str = "@Admin", video_url: str = "") -> In
 
 def review_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Confirm & Submit", callback_data="sub_confirm")],
+        [InlineKeyboardButton("✅ I Have Logged Out — Confirm & Submit", callback_data="sub_confirm")],
         [
             InlineKeyboardButton("🔄 Start Over / Edit", callback_data="sub_restart"),
             InlineKeyboardButton("❌ Cancel", callback_data="sub_cancel")
@@ -200,8 +200,9 @@ async def receive_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔒 <b>PASS:</b> <code>{pass_code}</code>\n"
         f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "<i>If you made a mistake, tap <b>🔄 Start Over / Edit</b> or <b>❌ Cancel</b>. "
-        "If everything looks correct, tap <b>✅ Confirm & Submit</b>.</i>"
+        "⚠️ <b>CRITICAL: PLEASE LOG OUT OF YOUR ACCOUNT!</b>\n"
+        "<i>Please make sure you have completely <b>LOGGED OUT</b> of this account before confirming. If you stay logged in, verification will fail and your submission cannot be approved.</i>\n\n"
+        "👉 <i>Please log out now, then tap <b>✅ I Have Logged Out — Confirm & Submit</b> to send your request:</i>"
     )
 
     await update.message.reply_text(
@@ -266,6 +267,13 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data.clear()
 
     # Success confirmation message to User
+    logout_notice = (
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ <b>ACTION REQUIRED: PLEASE LOG OUT NOW!</b>\n"
+        "<i>Please ensure you are completely logged out of this account immediately so our team can access and verify your request.</i>\n"
+        "━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
     if resub_id:
         user_confirm = (
             f"🔄 <b>Resubmission Received Successfully!</b>\n"
@@ -276,6 +284,7 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
             f"📅 <b>Resubmitted Date:</b> {resub_date}\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{logout_notice}"
             f"🔢 <b>Queue Information:</b>\n"
             f"• <b>Your Queue Position:</b> #{position}\n"
             f"• <b>Submissions Ahead of You:</b> {ahead_count} waiting for review\n"
@@ -283,7 +292,7 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             f"⏳ <b>Current Status:</b> <b>Pending Review</b>\n\n"
             f"📢 <b>Next Steps:</b>\n"
             f"1. When an admin starts reviewing, your status will change to <b>In Review</b>.\n"
-            f"2. Once accepted, you will receive: <i>'status changed to accepted your payment will be made soon'</i>.\n"
+            f"2. Once accepted, you will receive payment instructions.\n"
             f"3. You can track your position anytime using the <b>📊 Check Status & Queue</b> button."
         )
     else:
@@ -296,6 +305,7 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
             f"📅 <b>Submitted Date:</b> {submitted_date}\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{logout_notice}"
             f"🔢 <b>Queue Information:</b>\n"
             f"• <b>Your Queue Position:</b> #{position}\n"
             f"• <b>Submissions Ahead of You:</b> {ahead_count} waiting for review\n"
@@ -303,7 +313,7 @@ async def sub_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             f"⏳ <b>Current Status:</b> <b>Pending Review</b>\n\n"
             f"📢 <b>Next Steps:</b>\n"
             f"1. When an admin starts reviewing, your status will change to <b>In Review</b>.\n"
-            f"2. Once accepted, you will receive: <i>'status changed to accepted your payment will be made soon'</i>.\n"
+            f"2. Once accepted, you will receive payment instructions.\n"
             f"3. You can track your position anytime using the <b>📊 Check Status & Queue</b> button."
         )
     await query.edit_message_text(

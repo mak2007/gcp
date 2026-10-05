@@ -38,7 +38,10 @@ def admin_submission_actions_keyboard(submission_id: int, current_status: str) -
     if current_status != "PENDING":
         buttons.append([InlineKeyboardButton("↩️ Undo / Revert to Pending", callback_data=f"adm_st:{submission_id}:PENDING")])
 
-    buttons.append([InlineKeyboardButton("🔄 Refresh Details", callback_data=f"adm_view:{submission_id}")])
+    buttons.append([
+        InlineKeyboardButton("🔄 Refresh Details", callback_data=f"adm_view:{submission_id}"),
+        InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")
+    ])
     return InlineKeyboardMarkup(buttons)
 
 def admin_dashboard_keyboard() -> InlineKeyboardMarkup:
@@ -46,6 +49,10 @@ def admin_dashboard_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("⏳ Pending Queue", callback_data="adm_list:PENDING:0"),
             InlineKeyboardButton("🔍 In Review", callback_data="adm_list:IN_REVIEW:0")
+        ],
+        [
+            InlineKeyboardButton("✅ Approved Submissions", callback_data="adm_list:ACCEPTED:0"),
+            InlineKeyboardButton("❌ Disapproved Submissions", callback_data="adm_list:DISAPPROVED:0")
         ],
         [
             InlineKeyboardButton("🔄 Resubmitted Emails", callback_data="adm_resub_list:0"),

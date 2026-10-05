@@ -132,9 +132,18 @@ async def admin_list_submissions_callback(update: Update, context: ContextTypes.
 
     items = await db.get_submissions_by_status(status, limit=limit, offset=offset)
 
+    status_titles = {
+        "PENDING": "⏳ Pending Queue",
+        "IN_REVIEW": "🔍 In Review",
+        "ACCEPTED": "✅ Approved Submissions",
+        "DISAPPROVED": "❌ Disapproved Submissions",
+        "CAN_RESUBMIT": "🔄 Can Resubmit"
+    }
+    title = status_titles.get(status, status)
+
     if not items:
         await query.edit_message_text(
-            f"ℹ️ No submissions found under <b>{status}</b> (page {offset // limit + 1}).",
+            f"ℹ️ No submissions found under <b>{title}</b> (page {offset // limit + 1}).",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")
@@ -142,13 +151,15 @@ async def admin_list_submissions_callback(update: Update, context: ContextTypes.
         )
         return
 
-    text = f"📋 <b>Submissions: {status}</b> (Page {offset // limit + 1})\n━━━━━━━━━━━━━━━━━━━\n"
+    text = f"📋 <b>Submissions: {title}</b> (Page {offset // limit + 1})\n━━━━━━━━━━━━━━━━━━━\n"
     keyboard_buttons = []
 
     for item in items:
+        note_str = f" | Note: <i>{item['admin_notes']}</i>" if item.get('admin_notes') else ""
         text += (
             f"• <b>#{item['id']}</b> | <code>{item['email']}</code>\n"
-            f"  PASS: <code>{item.get('pass_code') or item.get('full_name')}</code> | Key: <code>{item.get('key_code') or item.get('unique_code')}</code> | Date: {item['created_at']}\n\n"
+            f"  PASS: <code>{item.get('pass_code') or item.get('full_name')}</code> | Key: <code>{item.get('key_code') or item.get('unique_code')}</code>\n"
+            f"  📅 {item['created_at']}{note_str}\n\n"
         )
         keyboard_buttons.append([
             InlineKeyboardButton(f"👉 Manage #{item['id']} ({item['email'][:16]})", callback_data=f"adm_view:{item['id']}")
@@ -339,7 +350,19 @@ async def admin_change_status_callback(update: Update, context: ContextTypes.DEF
         except Exception:
             pass
 
-    # Update admin message
+        # Remove from chat and maintain in category buttons
+        await query.answer(f"✅ Approved #{sub_id} & removed from chat! Maintained in 'Approved Submissions' category.", show_alert=False)
+        try:
+            await query.message.delete()
+        except Exception:
+            await query.edit_message_text(
+                f"✅ <b>Submission #{sub_id} Approved!</b>\n<i>(Maintained under '✅ Approved Submissions' in Dashboard)</i>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]])
+            )
+        return
+
+    # Update admin message for other statuses (e.g. IN_REVIEW)
     q_info = await db.get_queue_info(sub_id) if new_status == "PENDING" else None
     card_text = format_admin_submission_card(updated_sub, q_info)
     kb = admin_submission_actions_keyboard(sub_id, new_status)
@@ -400,13 +423,16 @@ async def admin_disapprove_do_callback(update: Update, context: ContextTypes.DEF
     except Exception:
         pass
 
-    card_text = format_admin_submission_card(updated_sub)
-    kb = admin_submission_actions_keyboard(sub_id, "DISAPPROVED")
-    await query.edit_message_text(
-        f"❌ <b>Submission #{sub_id} Disapproved!</b>\n\n" + card_text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=kb
-    )
+    # Remove from chat and maintain in category buttons
+    await query.answer(f"❌ Disapproved #{sub_id} & removed from chat! Maintained in 'Disapproved Submissions' category.", show_alert=False)
+    try:
+        await query.message.delete()
+    except Exception:
+        await query.edit_message_text(
+            f"❌ <b>Submission #{sub_id} Disapproved!</b>\n<i>(Maintained under '❌ Disapproved Submissions' in Dashboard)</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]])
+        )
 
 async def admin_resubmit_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query

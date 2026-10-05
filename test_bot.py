@@ -259,11 +259,24 @@ async def run_tests():
     assert await db.get_support_handle() == "@MySupportAdmin"
     print("✅ Dynamic Bot Settings (Channel, Video, Support Handle) persistence and live retrieval verified.")
 
+    # 16. Test Category Separation for Approved & Disapproved Submissions
+    acc_sub_id = await db.create_submission(9991, "approved_u", "approved@test.com", "P", "K")
+    await db.update_submission_status(acc_sub_id, "ACCEPTED")
+    dis_sub_id = await db.create_submission(9992, "disapproved_u", "disapproved@test.com", "P", "K")
+    await db.update_submission_status(dis_sub_id, "DISAPPROVED", admin_notes="Invalid unique code")
+
+    approved_list = await db.get_submissions_by_status("ACCEPTED")
+    assert any(s["id"] == acc_sub_id for s in approved_list), "Approved submission must appear in ACCEPTED category"
+
+    disapproved_list = await db.get_submissions_by_status("DISAPPROVED")
+    assert any(s["id"] == dis_sub_id for s in disapproved_list), "Disapproved submission must appear in DISAPPROVED category"
+    print("✅ Category isolation (Approved vs Disapproved) verified.")
+
     # Cleanup test db
     if os.path.exists("test_bot.sqlite"):
         os.remove("test_bot.sqlite")
 
-    print("\n🎉 ALL 15 TEST SUITES PASSED PERFECTLY!")
+    print("\n🎉 ALL 16 TEST SUITES PASSED PERFECTLY!")
 
 if __name__ == "__main__":
     asyncio.run(run_tests())
