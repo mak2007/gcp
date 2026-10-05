@@ -1,78 +1,52 @@
 import re
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
-from config import ADMIN_IDS, SUPPORT_HANDLE
+from config import ADMIN_IDS, SUPPORT_HANDLE, REQUIRED_CHANNEL, TUTORIAL_VIDEO_URL
 import database as db
 from keyboards import main_menu_keyboard, user_status_keyboard, cancel_keyboard
 
 WAIT_SUPPORT_MSG = 101
 
-def format_status_text(submission: dict, queue_info: dict = None) -> str:
-    status = submission["status"]
-    status_emoji_map = {
-        "PENDING": "⏳ Pending in Queue",
-        "IN_REVIEW": "🔍 In Review",
-        "ACCEPTED": "✅ Accepted",
-        "DISAPPROVED": "❌ Disapproved",
-        "CAN_RESUBMIT": "🔄 Can Be Resubmitted"
-    }
-    status_str = status_emoji_map.get(status, status)
-    pass_val = submission.get("pass_code") or submission.get("full_name") or "N/A"
-    key_val = submission.get("key_code") or submission.get("unique_code") or "N/A"
-    
-    text = (
-        f"📋 <b>Your Submission Details</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"🆔 <b>Submission ID:</b> #{submission['id']}\n"
-        f"📧 <b>Email:</b> <code>{submission['email']}</code>\n"
-        f"🔒 <b>PASS:</b> <code>{pass_val}</code>\n"
-        f"🔑 <b>Key:</b> <code>{key_val}</code>\n"
-        f"📅 <b>Submitted Date:</b> {submission['created_at']}\n"
-        f"📊 <b>Current Status:</b> <b>{status_str}</b>\n"
-    )
-
-    if submission.get("admin_notes"):
-        text += f"📝 <b>Admin Note:</b> {submission['admin_notes']}\n"
-
-    text += "━━━━━━━━━━━━━━━━━━━\n"
-
-    if status == "PENDING":
-        pos = queue_info["position"] if queue_info else "?"
-        ahead = queue_info["ahead_count"] if queue_info else "?"
-        total = queue_info["total_pending"] if queue_info else "?"
-        text += (
-            f"🔢 <b>Queue Information:</b>\n"
-            f"• <b>Your Queue Position:</b> #{pos}\n"
-            f"• <b>Submissions Ahead of You:</b> {ahead}\n"
-            f"• <b>Total Pending Submissions:</b> {total}\n\n"
-            f"<i>Your submission is waiting in line. Once an admin starts processing your submission, "
-            f"you will receive a notification that your status changed to 'In Review'.</i>"
-        )
-    elif status == "IN_REVIEW":
-        text += (
-            "🔍 <b>Status Update:</b>\n"
-            "An administrator is currently reviewing your submission details. "
-            "Please wait for final approval."
-        )
-    elif status == "ACCEPTED":
-        text += (
-            "🎉 <b>Congratulations!</b>\n"
-            "status changed to accepted your payment will be made soon ✨"
-        )
-    elif status == "DISAPPROVED":
-        text += (
-            "⚠️ <b>Submission Disapproved:</b>\n"
-            "Your submission was rejected by the admin.\n"
-            "If you believe this was in error, tap <b>⚖️ Submit Appeal</b> in the menu."
-        )
-    elif status == "CAN_RESUBMIT":
-        text += (
-            "⚠️ <b>Resubmission Allowed:</b>\n"
-            "The admin has permitted you to resubmit or correct your details.\n"
-            "Tap <b>📝 Submit Information</b> to enter your updated information."
+async def format_user_overview(user_id: int) -> str:
+    subs = await db.get_all_submissions_by_user(user_id)
+    if not subs:
+        return (
+            "ℹ️ <b>No Submissions Found</b>\n\n"
+            "You have not submitted any details yet.\n"
+            "Tap <b>📝 Submit Information</b> below to get started!"
         )
 
+    text = f"📊 <b>Your Submissions Overview ({len(subs)} Total):</b>\n━━━━━━━━━━━━━━━━━━━\n\n"
+
+    for i, s in enumerate(subs, 1):
+        status = s["status"]
+        if status == "PENDING":
+            q_info = await db.get_queue_info(s["id"])
+            status_str = f"⏳ Pending (Queue #{q_info['position']} | {q_info['ahead_count']} ahead)"
+        elif status == "IN_REVIEW":
+            status_str = "🔍 In Review"
+        elif status == "ACCEPTED":
+            status_str = "✅ Accepted (Payment soon)"
+        elif status == "DISAPPROVED":
+            status_str = "❌ Rejected / Disapproved"
+        elif status == "CAN_RESUBMIT":
+            status_str = "🔄 Can Resubmit"
+        else:
+            status_str = status
+
+        pass_val = s.get("pass_code") or s.get("full_name") or "N/A"
+        key_val = s.get("key_code") or s.get("unique_code") or "N/A"
+
+        text += (
+            f"<b>{i}.</b> 📧 <code>{s['email']}</code>\n"
+            f"   • 🔒 <b>PASS:</b> <code>{pass_val}</code>\n"
+            f"   • 🔑 <b>Key:</b> <code>{key_val}</code>\n"
+            f"   • 📊 <b>Status:</b> <b>{status_str}</b>\n"
+            f"   • 📅 <b>Date:</b> {s['created_at']}\n\n"
+        )
+
+    text += "━━━━━━━━━━━━━━━━━━━"
     return text
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -80,43 +54,46 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     is_admin = user.id in ADMIN_IDS
 
-    # Register user in database for announcements and records
+    # Register user in database
     await db.register_user(user.id, user.username, user.first_name)
 
     welcome_text = (
         f"👋 <b>Welcome to Madcorn Bot!</b>\n\n"
-        f"📌 <b>Available Options:</b>\n"
-        f"• <b>📝 Submit Information:</b> Submit your Email, PASS, and Key.\n"
-        f"• <b>📊 Check Status & Queue:</b> View your submission date, current status, and queue number.\n"
-        f"• <b>⚖️ Submit Appeal:</b> Submit an appeal if your submission was disapproved.\n"
-        f"• <b>💬 Support:</b> Contact administrative support for any inquiries."
+        f"🎥 <b>Tutorial Video:</b> <a href=\"{TUTORIAL_VIDEO_URL}\">Watch Here</a>\n\n"
+        f"📢 <b>Please join our updates channel first:</b>\n"
+        f"👉 <a href=\"{REQUIRED_CHANNEL}\">Click to Join Channel</a>"
     )
+
+    join_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Join Channel", url=REQUIRED_CHANNEL)],
+        [InlineKeyboardButton("🎥 Tutorial Video", url=TUTORIAL_VIDEO_URL)],
+        [InlineKeyboardButton("✅ I Have Joined / Continue", callback_data="usr_continue_main")]
+    ])
+
     await update.message.reply_text(
         welcome_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=join_keyboard,
+        disable_web_page_preview=True
+    )
+
+async def continue_main_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    is_admin = update.effective_user.id in ADMIN_IDS
+
+    await query.message.reply_text(
+        "✅ <b>Welcome to Madcorn Bot!</b>\nSelect an option below:",
         parse_mode=ParseMode.HTML,
         reply_markup=main_menu_keyboard(is_admin)
     )
 
 async def check_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    sub = await db.get_submission_by_user(user_id)
+    overview_text = await format_user_overview(user_id)
 
-    if not sub:
-        await update.message.reply_text(
-            "ℹ️ <b>No Submission Found</b>\n\n"
-            "You have not submitted your details yet.\n"
-            "Tap <b>📝 Submit Information</b> below to get started!",
-            parse_mode=ParseMode.HTML
-        )
-        return
-
-    queue_info = None
-    if sub["status"] == "PENDING":
-        queue_info = await db.get_queue_info(sub["id"])
-
-    text = format_status_text(sub, queue_info)
     await update.message.reply_text(
-        text,
+        overview_text,
         parse_mode=ParseMode.HTML,
         reply_markup=user_status_keyboard()
     )
@@ -125,34 +102,22 @@ async def refresh_status_callback(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     await query.answer("Status refreshed!")
     user_id = update.effective_user.id
-    sub = await db.get_submission_by_user(user_id)
+    overview_text = await format_user_overview(user_id)
 
-    if not sub:
-        await query.edit_message_text("No submission found.")
-        return
-
-    queue_info = None
-    if sub["status"] == "PENDING":
-        queue_info = await db.get_queue_info(sub["id"])
-
-    text = format_status_text(sub, queue_info)
     try:
         await query.edit_message_text(
-            text,
+            overview_text,
             parse_mode=ParseMode.HTML,
             reply_markup=user_status_keyboard()
         )
     except Exception:
-        # Message content identical
         pass
 
 async def support_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     support_text = (
-        f"💬 <b>Support & Assistance</b>\n\n"
-        f"If you have any questions or encounter issues, we're here to help:\n\n"
-        f"• <b>Direct Admin Contact:</b> {SUPPORT_HANDLE}\n\n"
-        f"You can also send a direct message to our support staff right now. "
-        f"Type your message below or press <b>❌ Cancel</b> to return."
+        f"💬 <b>Support</b>\n\n"
+        f"Contact Admin: {SUPPORT_HANDLE}\n\n"
+        f"Or type your question below (or send ❌ Cancel):"
     )
     await update.message.reply_text(
         support_text,
@@ -172,11 +137,10 @@ async def receive_support_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await db.save_support_message(user.id, user.username, msg_text)
 
-    # Forward support request to all admins
     alert = (
-        f"📩 <b>New Support Message</b>\n"
-        f"From: <b>{user.full_name}</b> (@{user.username or 'NoUsername'} | ID: <code>{user.id}</code>)\n\n"
-        f"<b>Message:</b>\n{msg_text}"
+        f"📩 <b>Support Inquiry</b>\n"
+        f"From: @{user.username or 'NoUsername'} (ID: <code>{user.id}</code>)\n\n"
+        f"{msg_text}"
     )
     for admin_id in ADMIN_IDS:
         try:
@@ -185,8 +149,7 @@ async def receive_support_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
             pass
 
     await update.message.reply_text(
-        "✅ <b>Your message has been forwarded to support!</b>\nAn admin will review it shortly.",
-        parse_mode=ParseMode.HTML,
+        "✅ Message sent to support!",
         reply_markup=main_menu_keyboard(is_admin)
     )
     return ConversationHandler.END

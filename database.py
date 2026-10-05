@@ -97,6 +97,17 @@ async def get_submission_by_user(user_id: int) -> Optional[Dict[str, Any]]:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+async def get_all_submissions_by_user(user_id: int) -> List[Dict[str, Any]]:
+    """Gets all submissions made by a given Telegram user ID ordered newest to oldest."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM submissions WHERE user_id = ? ORDER BY id DESC",
+            (user_id,)
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
 async def get_submission_by_id(submission_id: int) -> Optional[Dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

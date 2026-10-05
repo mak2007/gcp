@@ -137,11 +137,20 @@ async def run_tests():
     assert total_users_count >= 2
     print(f"✅ User registration & broadcast targeting passed: {total_users_count} total users reach.")
 
+    # 9. Test Multiple Submissions per user
+    user_multi_id = 9999
+    await db.create_submission(user_multi_id, "multi_user", "batch1@gmail.com", "P1", "K1")
+    await db.create_submission(user_multi_id, "multi_user", "batch2@gmail.com", "P2", "K2")
+    await db.create_submission(user_multi_id, "multi_user", "batch3@gmail.com", "P3", "K3")
+    user_subs = await db.get_all_submissions_by_user(user_multi_id)
+    assert len(user_subs) == 3
+    print(f"✅ Multiple submissions per user verified: user has {len(user_subs)} active submissions!")
+
     # Cleanup test db
     if os.path.exists("test_bot.sqlite"):
         os.remove("test_bot.sqlite")
 
-    print("\n🎉 ALL 8 TEST SUITES PASSED PERFECTLY!")
+    print("\n🎉 ALL 9 TEST SUITES PASSED PERFECTLY!")
 
 if __name__ == "__main__":
     asyncio.run(run_tests())

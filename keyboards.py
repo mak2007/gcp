@@ -52,6 +52,7 @@ def admin_dashboard_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📥 Export CSV", callback_data="adm_export_csv")
         ],
         [
+            InlineKeyboardButton("📄 Export TXT", callback_data="adm_export_txt"),
             InlineKeyboardButton("🔎 Search Submission", callback_data="adm_search_prompt")
         ]
     ])

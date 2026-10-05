@@ -32,6 +32,8 @@ ADMIN_IDS: List[int] = [
     int(x.strip()) for x in raw_admin_ids.split(",") if x.strip().isdigit()
 ]
 
-SUPPORT_HANDLE: str = get_env_flexible("SUPPORT_HANDLE", "@AdminSupport")
+SUPPORT_HANDLE: str = get_env_flexible("SUPPORT_HANDLE", "@LALAJIIIIIIIIII")
 DB_PATH: str = get_env_flexible("DB_PATH", "bot_database.sqlite")
+REQUIRED_CHANNEL: str = get_env_flexible("REQUIRED_CHANNEL", "https://t.me/LALAJIIIIIIIIII")
+TUTORIAL_VIDEO_URL: str = get_env_flexible("TUTORIAL_VIDEO_URL", "https://t.me/LALAJIIIIIIIIII")
 

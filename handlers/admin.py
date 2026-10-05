@@ -503,16 +503,16 @@ async def admin_export_csv_callback(update: Update, context: ContextTypes.DEFAUL
     submissions = await db.get_all_submissions()
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["ID", "User ID", "Username", "Full Name", "Email", "Unique Code", "Status", "Admin Notes", "Created At", "Updated At"])
+    writer.writerow(["ID", "User ID", "Username", "Email", "PASS", "Key", "Status", "Admin Notes", "Created At", "Updated At"])
 
     for s in submissions:
         writer.writerow([
             s["id"],
             s["user_id"],
             s.get("username") or "",
-            s["full_name"],
             s["email"],
-            s["unique_code"],
+            s.get("pass_code") or s.get("full_name") or "",
+            s.get("key_code") or s.get("unique_code") or "",
             s["status"],
             s.get("admin_notes") or "",
             s["created_at"],
@@ -524,7 +524,62 @@ async def admin_export_csv_callback(update: Update, context: ContextTypes.DEFAUL
 
     await query.message.reply_document(
         document=InputFile(csv_bytes, filename="submissions_export.csv"),
-        caption=f"📊 <b>Submissions Export</b>\nTotal records: {len(submissions)}",
+        caption=f"📊 <b>Submissions Export (CSV)</b>\nTotal records: {len(submissions)}",
+        parse_mode=ParseMode.HTML
+    )
+
+async def generate_txt_file(submissions: list) -> io.BytesIO:
+    lines = [
+        "=" * 60,
+        "MADCORN BOT - SUBMISSIONS DATA EXPORT (TEXT FORMAT)",
+        f"Total Records: {len(submissions)}",
+        "=" * 60,
+        ""
+    ]
+    for s in submissions:
+        pass_val = s.get("pass_code") or s.get("full_name") or "N/A"
+        key_val = s.get("key_code") or s.get("unique_code") or "N/A"
+        lines.append(f"[Submission #{s['id']}] Date: {s['created_at']}")
+        lines.append(f"  • Email:    {s['email']}")
+        lines.append(f"  • PASS:     {pass_val}")
+        lines.append(f"  • Key:      {key_val}")
+        lines.append(f"  • Status:   {s['status']}")
+        lines.append(f"  • User:     @{s.get('username') or 'None'} (ID: {s['user_id']})")
+        if s.get("admin_notes"):
+            lines.append(f"  • Notes:    {s['admin_notes']}")
+        lines.append("-" * 60)
+        lines.append("")
+
+    txt_content = "\n".join(lines)
+    txt_bytes = io.BytesIO(txt_content.encode("utf-8"))
+    txt_bytes.name = "submissions_export.txt"
+    return txt_bytes
+
+async def admin_export_txt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Generating TXT file...")
+    if not is_admin(query.from_user.id):
+        return
+
+    submissions = await db.get_all_submissions()
+    txt_bytes = await generate_txt_file(submissions)
+
+    await query.message.reply_document(
+        document=InputFile(txt_bytes, filename="submissions_export.txt"),
+        caption=f"📄 <b>Submissions Data (TXT Format)</b>\nTotal records: {len(submissions)}",
+        parse_mode=ParseMode.HTML
+    )
+
+async def admin_export_txt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    submissions = await db.get_all_submissions()
+    txt_bytes = await generate_txt_file(submissions)
+
+    await update.message.reply_document(
+        document=InputFile(txt_bytes, filename="submissions_export.txt"),
+        caption=f"📄 <b>Submissions Data (TXT Format)</b>\nTotal records: {len(submissions)}",
         parse_mode=ParseMode.HTML
     )
 

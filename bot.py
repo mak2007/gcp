@@ -21,6 +21,7 @@ import database as db
 
 from handlers.user import (
     start_handler,
+    continue_main_callback,
     check_status_handler,
     refresh_status_callback,
     support_handler,
@@ -60,6 +61,8 @@ from handlers.admin import (
     admin_view_appeal_callback,
     admin_appeal_decision_callback,
     admin_export_csv_callback,
+    admin_export_txt_callback,
+    admin_export_txt_command,
     admin_search_command,
     admin_broadcast_prompt_callback,
     receive_broadcast_text,
@@ -185,6 +188,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^📊 Check Status & Queue$"), check_status_handler))
 
     # User Callbacks
+    app.add_handler(CallbackQueryHandler(continue_main_callback, pattern=r"^usr_continue_main$"))
     app.add_handler(CallbackQueryHandler(refresh_status_callback, pattern=r"^usr_refresh_status$"))
 
     # 6. Admin Commands & Handlers
@@ -192,6 +196,8 @@ def main():
     app.add_handler(CommandHandler("search", admin_search_command))
     app.add_handler(CommandHandler("broadcast", admin_quick_broadcast_command))
     app.add_handler(CommandHandler("announce", admin_quick_broadcast_command))
+    app.add_handler(CommandHandler("txt", admin_export_txt_command))
+    app.add_handler(CommandHandler("export", admin_export_txt_command))
     app.add_handler(MessageHandler(filters.Regex("^⚙️ Admin Dashboard$"), admin_dashboard_command))
 
     # Admin Callback Queries
@@ -208,6 +214,7 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_view_appeal_callback, pattern=r"^adm_app_view:"))
     app.add_handler(CallbackQueryHandler(admin_appeal_decision_callback, pattern=r"^app_dec:"))
     app.add_handler(CallbackQueryHandler(admin_export_csv_callback, pattern=r"^adm_export_csv$"))
+    app.add_handler(CallbackQueryHandler(admin_export_txt_callback, pattern=r"^adm_export_txt$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_do_callback, pattern=r"^adm_bcast_do$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_cancel_callback, pattern=r"^adm_bcast_cancel$"))
 
