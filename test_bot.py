@@ -6,7 +6,10 @@ import sys
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
+import config
 import database as db
+import keyboards
+from handlers import admin, user, submission, appeal
 
 async def run_tests():
     print("[*] Running database & logic tests...")
