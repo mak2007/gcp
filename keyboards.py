@@ -16,62 +16,73 @@ def cancel_keyboard() -> ReplyKeyboardMarkup:
 def admin_submission_actions_keyboard(submission_id: int, current_status: str) -> InlineKeyboardMarkup:
     buttons = []
     
-    # First row: In Review & Accept
-    row1 = []
-    if current_status != "IN_REVIEW":
-        row1.append(InlineKeyboardButton("🔍 In Review", callback_data=f"adm_st:{submission_id}:IN_REVIEW"))
-    if current_status != "ACCEPTED":
-        row1.append(InlineKeyboardButton("✅ Accept (Pay)", callback_data=f"adm_st:{submission_id}:ACCEPTED"))
-    if row1:
-        buttons.append(row1)
+    # Verdict buttons
+    buttons.append([
+        InlineKeyboardButton("✅ Accept (Pay)", callback_data=f"adm_st:{submission_id}:ACCEPTED"),
+        InlineKeyboardButton("❌ Disapprove", callback_data=f"adm_dis:{submission_id}")
+    ])
 
-    # Second row: Disapprove & Resubmit
-    row2 = []
-    if current_status != "DISAPPROVED":
-        row2.append(InlineKeyboardButton("❌ Disapprove", callback_data=f"adm_dis:{submission_id}"))
-    if current_status != "CAN_RESUBMIT":
-        row2.append(InlineKeyboardButton("🔄 Can Resubmit", callback_data=f"adm_res:{submission_id}"))
-    if row2:
-        buttons.append(row2)
+    buttons.append([
+        InlineKeyboardButton("🔄 Can Resubmit", callback_data=f"adm_res:{submission_id}"),
+        InlineKeyboardButton("🔍 In Review", callback_data=f"adm_st:{submission_id}:IN_REVIEW")
+    ])
 
     # Undo / Revert to Pending button
     if current_status != "PENDING":
         buttons.append([InlineKeyboardButton("↩️ Undo / Revert to Pending", callback_data=f"adm_st:{submission_id}:PENDING")])
 
     buttons.append([
-        InlineKeyboardButton("🔄 Refresh Details", callback_data=f"adm_view:{submission_id}"),
-        InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")
+        InlineKeyboardButton("⏳ In Queue", callback_data="adm_list:PENDING:0"),
+        InlineKeyboardButton("🔙 Dashboard", callback_data="adm_dashboard_nav")
     ])
     return InlineKeyboardMarkup(buttons)
 
-def admin_dashboard_keyboard() -> InlineKeyboardMarkup:
+def admin_dashboard_keyboard(stats: Optional[dict] = None) -> InlineKeyboardMarkup:
+    if stats:
+        pend_c = stats.get('pending', 0)
+        acc_c = stats.get('accepted', 0)
+        dis_c = stats.get('disapproved', 0)
+        resub_c = stats.get('can_resubmit', 0)
+        app_c = stats.get('appeals_pending', 0)
+        row1_txt = f"⏳ In Queue ({pend_c})"
+        row2_acc = f"✅ Approved Gmails ({acc_c})"
+        row2_dis = f"❌ Rejected Accs ({dis_c})"
+        row3_res = f"🔄 Resubmit-Clicked ({resub_c})"
+        row3_app = f"⚖️ Appeals ({app_c})"
+    else:
+        row1_txt = "⏳ In Queue"
+        row2_acc = "✅ Approved Gmails"
+        row2_dis = "❌ Rejected Accs"
+        row3_res = "🔄 Resubmit-Clicked"
+        row3_app = "⚖️ Appeals"
+
     return InlineKeyboardMarkup([
+        # 1. Main Queue (highest priority)
+        [InlineKeyboardButton(row1_txt, callback_data="adm_list:PENDING:0")],
+        # 2. Approved Gmails & Rejected Accounts
         [
-            InlineKeyboardButton("⏳ Pending Queue", callback_data="adm_list:PENDING:0"),
-            InlineKeyboardButton("🔍 In Review", callback_data="adm_list:IN_REVIEW:0")
+            InlineKeyboardButton(row2_acc, callback_data="adm_list:ACCEPTED:0"),
+            InlineKeyboardButton(row2_dis, callback_data="adm_list:DISAPPROVED:0")
         ],
+        # 3. Resubmit-Clicked Accounts & Appeals
         [
-            InlineKeyboardButton("✅ Approved Submissions", callback_data="adm_list:ACCEPTED:0"),
-            InlineKeyboardButton("❌ Disapproved Submissions", callback_data="adm_list:DISAPPROVED:0")
+            InlineKeyboardButton(row3_res, callback_data="adm_list:CAN_RESUBMIT:0"),
+            InlineKeyboardButton(row3_app, callback_data="adm_appeals:0")
         ],
+        # 4. Fast Exports
         [
-            InlineKeyboardButton("🔄 Resubmitted Emails", callback_data="adm_resub_list:0"),
-            InlineKeyboardButton("⚖️ Pending Appeals", callback_data="adm_appeals:0")
+            InlineKeyboardButton("📄 Export TXT", callback_data="adm_export_txt"),
+            InlineKeyboardButton("📦 Custom TXT Batch", callback_data="adm_req_txt_prompt")
         ],
+        # 5. Broadcast & Search
         [
-            InlineKeyboardButton("📊 Inventory / Stock Stats", callback_data="adm_stats"),
-            InlineKeyboardButton("📢 Make Announcement", callback_data="adm_broadcast_prompt")
-        ],
-        [
-            InlineKeyboardButton("📥 Export CSV", callback_data="adm_export_csv"),
-            InlineKeyboardButton("📄 Export All TXT", callback_data="adm_export_txt")
-        ],
-        [
-            InlineKeyboardButton("📄 Request Custom TXT Batch", callback_data="adm_req_txt_prompt"),
+            InlineKeyboardButton("📢 Announcement", callback_data="adm_broadcast_prompt"),
             InlineKeyboardButton("🔎 Search Submission", callback_data="adm_search_prompt")
         ],
+        # 6. Settings & Stats
         [
-            InlineKeyboardButton("🔗 Bot Links & Settings", callback_data="adm_settings_menu")
+            InlineKeyboardButton("📊 Stats & Inventory", callback_data="adm_stats"),
+            InlineKeyboardButton("⚙️ Bot Settings", callback_data="adm_settings_menu")
         ]
     ])
 

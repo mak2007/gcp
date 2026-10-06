@@ -409,6 +409,12 @@ async def get_submissions_by_status(status: str, limit: int = 10, offset: int = 
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
+async def get_submissions_count_by_status(status: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM submissions WHERE status = ?", (status,))
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
 async def get_submissions_batch(limit: int = 5, status: Optional[str] = "PENDING") -> List[Dict[str, Any]]:
     """Gets up to 'limit' submissions from pool (prioritizing 'status' if specified, filling from general pool if needed)."""
     async with aiosqlite.connect(DB_PATH) as db:

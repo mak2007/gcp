@@ -61,32 +61,28 @@ async def admin_dashboard_command(update: Update, context: ContextTypes.DEFAULT_
     text = (
         f"⚙️ <b>Admin Control Dashboard</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"📦 <b>INVENTORY & STOCK OVERVIEW:</b>\n"
-        f"• 🆕 <b>New Accounts:</b> {stats['new_total']} (⏳ {stats['new_pending']} pending)\n"
-        f"• 🔄 <b>Resubmitted Accounts:</b> {stats['resubmitted_total']} (⏳ {stats['resubmitted_pending']} pending)\n"
-        f"• 📦 <b>Total Accounts in Pool:</b> {stats['total']}\n\n"
-        f"📊 <b>STATUS BREAKDOWN:</b>\n"
-        f"• ⏳ <b>Pending Queue:</b> {stats['pending']}\n"
-        f"• 🔍 <b>In Review:</b> {stats['in_review']}\n"
-        f"• ✅ <b>Accepted (Paid):</b> {stats['accepted']}\n"
-        f"• ❌ <b>Disapproved:</b> {stats['disapproved']}\n"
-        f"• 🔓 <b>Unlocked for Resubmit:</b> {stats['can_resubmit']}\n"
+        f"• ⏳ <b>In Queue:</b> {stats['pending']} waiting for review\n"
+        f"• ✅ <b>Approved Accounts:</b> {stats['accepted']} approved\n"
+        f"• ❌ <b>Rejected Accounts:</b> {stats['disapproved']} rejected\n"
+        f"• 🔄 <b>Resubmit-Clicked:</b> {stats['can_resubmit']} unlocked\n"
         f"• ⚖️ <b>Pending Appeals:</b> {stats['appeals_pending']}\n"
+        f"• 📦 <b>Total Submissions:</b> {stats['total']}\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"Select an action below:"
+        f"<i>Select a category below to view or manage:</i>"
     )
+    kb = admin_dashboard_keyboard(stats)
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(
             text,
             parse_mode=ParseMode.HTML,
-            reply_markup=admin_dashboard_keyboard()
+            reply_markup=kb
         )
     else:
         await update.message.reply_text(
             text,
             parse_mode=ParseMode.HTML,
-            reply_markup=admin_dashboard_keyboard()
+            reply_markup=kb
         )
     return ConversationHandler.END
 
@@ -132,19 +128,22 @@ async def admin_list_submissions_callback(update: Update, context: ContextTypes.
     limit = 5
 
     items = await db.get_submissions_by_status(status, limit=limit, offset=offset)
+    total_count = await db.get_submissions_count_by_status(status)
+    page_num = offset // limit + 1
+    total_pages = max(1, (total_count + limit - 1) // limit)
 
     status_titles = {
-        "PENDING": "⏳ Pending Queue",
+        "PENDING": "⏳ In Queue",
         "IN_REVIEW": "🔍 In Review",
-        "ACCEPTED": "✅ Approved Submissions",
-        "DISAPPROVED": "❌ Disapproved Submissions",
-        "CAN_RESUBMIT": "🔄 Can Resubmit"
+        "ACCEPTED": "✅ Approved Gmails",
+        "DISAPPROVED": "❌ Rejected Accounts",
+        "CAN_RESUBMIT": "🔄 Resubmit-Clicked Accounts"
     }
     title = status_titles.get(status, status)
 
     if not items:
         await query.edit_message_text(
-            f"ℹ️ No submissions found under <b>{title}</b> (page {offset // limit + 1}).",
+            f"ℹ️ No accounts found under <b>{title}</b>.",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")
@@ -152,24 +151,105 @@ async def admin_list_submissions_callback(update: Update, context: ContextTypes.
         )
         return
 
-    text = f"📋 <b>Submissions: {title}</b> (Page {offset // limit + 1})\n━━━━━━━━━━━━━━━━━━━\n"
     keyboard_buttons = []
 
-    for item in items:
-        note_str = f" | Note: <i>{item['admin_notes']}</i>" if item.get('admin_notes') else ""
-        text += (
-            f"• <b>#{item['id']}</b> | <code>{item['email']}</code>\n"
-            f"  PASS: <code>{item.get('pass_code') or item.get('full_name')}</code> | Key: <code>{item.get('key_code') or item.get('unique_code')}</code>\n"
-            f"  📅 {item['created_at']}{note_str}\n\n"
+    if status == "ACCEPTED":
+        text = (
+            f"✅ <b>Approved Accounts (Gmails)</b>\n"
+            f"📊 Total Approved: <b>{total_count}</b> | Page {page_num}/{total_pages}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
         )
+        for i, item in enumerate(items, start=offset + 1):
+            pass_val = item.get('pass_code') or item.get('full_name') or 'N/A'
+            key_val = item.get('key_code') or item.get('unique_code') or 'N/A'
+            text += (
+                f"<b>{i}.</b> 📧 <code>{item['email']}</code>\n"
+                f"   • 🆔 #{item['id']} | 👤 @{item.get('username') or 'None'}\n"
+                f"   • 🔒 PASS: <code>{pass_val}</code>\n"
+                f"   • 🔑 Key: <code>{key_val}</code>\n"
+                f"   • 📅 {item['created_at']}\n\n"
+            )
+            keyboard_buttons.append([
+                InlineKeyboardButton(f"👉 Details #{item['id']} ({item['email'][:16]})", callback_data=f"adm_view:{item['id']}")
+            ])
         keyboard_buttons.append([
-            InlineKeyboardButton(f"👉 Manage #{item['id']} ({item['email'][:16]})", callback_data=f"adm_view:{item['id']}")
+            InlineKeyboardButton("📄 Export Approved TXT", callback_data="adm_export_txt:ACCEPTED")
         ])
+
+    elif status == "PENDING":
+        text = (
+            f"⏳ <b>In Queue (Waiting for Review)</b>\n"
+            f"📊 Total Waiting: <b>{total_count}</b> | Page {page_num}/{total_pages}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+        for i, item in enumerate(items, start=offset + 1):
+            is_resub = " <i>(RESUB)</i>" if item.get("is_resubmission") else ""
+            pass_val = item.get('pass_code') or item.get('full_name') or 'N/A'
+            key_val = item.get('key_code') or item.get('unique_code') or 'N/A'
+            text += (
+                f"<b>{i}.</b> 📧 <code>{item['email']}</code>{is_resub}\n"
+                f"   • 🆔 #{item['id']} | 🔒 <code>{pass_val}</code> | 🔑 <code>{key_val}</code>\n"
+                f"   • 📅 {item['created_at']}\n\n"
+            )
+            keyboard_buttons.append([
+                InlineKeyboardButton(f"👉 Review #{item['id']} ({item['email'][:16]})", callback_data=f"adm_view:{item['id']}")
+            ])
+
+    elif status == "DISAPPROVED":
+        text = (
+            f"❌ <b>Rejected Accounts</b>\n"
+            f"📊 Total Rejected: <b>{total_count}</b> | Page {page_num}/{total_pages}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+        for i, item in enumerate(items, start=offset + 1):
+            reason_str = item.get("admin_notes") or "General Disapproval"
+            text += (
+                f"<b>{i}.</b> 📧 <code>{item['email']}</code> (ID #{item['id']})\n"
+                f"   • 📝 Reason: <i>{reason_str}</i>\n"
+                f"   • 📅 {item['created_at']}\n\n"
+            )
+            keyboard_buttons.append([
+                InlineKeyboardButton(f"👉 Details #{item['id']} ({item['email'][:16]})", callback_data=f"adm_view:{item['id']}")
+            ])
+
+    elif status == "CAN_RESUBMIT":
+        text = (
+            f"🔄 <b>Resubmit-Clicked Accounts</b>\n"
+            f"📊 Total Unlocked: <b>{total_count}</b> | Page {page_num}/{total_pages}\n"
+            f"<i>(Accounts marked by admin for 8-hour cooldown / resubmission)</i>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+        for i, item in enumerate(items, start=offset + 1):
+            can_resub, reason, rem_h, rem_m = db.check_resubmit_eligibility(item)
+            cd_info = "✅ Ready to Resubmit" if can_resub else f"⏱️ Cooldown Active ({rem_h}h {rem_m}m remaining)"
+            note = item.get("admin_notes") or "Unlocked by admin"
+            text += (
+                f"<b>{i}.</b> 📧 <code>{item['email']}</code> (ID #{item['id']})\n"
+                f"   • ⏱️ Status: <b>{cd_info}</b>\n"
+                f"   • 📝 Note: <i>{note}</i>\n"
+                f"   • 📅 Unlocked: {item.get('resubmit_unlocked_at') or item['created_at']}\n\n"
+            )
+            keyboard_buttons.append([
+                InlineKeyboardButton(f"👉 Details #{item['id']} ({item['email'][:16]})", callback_data=f"adm_view:{item['id']}")
+            ])
+
+    else:
+        text = f"📋 <b>Submissions: {title}</b> (Page {page_num}/{total_pages})\n━━━━━━━━━━━━━━━━━━━\n\n"
+        for item in items:
+            note_str = f" | Note: <i>{item['admin_notes']}</i>" if item.get('admin_notes') else ""
+            text += (
+                f"• <b>#{item['id']}</b> | <code>{item['email']}</code>\n"
+                f"  PASS: <code>{item.get('pass_code') or item.get('full_name')}</code> | Key: <code>{item.get('key_code') or item.get('unique_code')}</code>\n"
+                f"  📅 {item['created_at']}{note_str}\n\n"
+            )
+            keyboard_buttons.append([
+                InlineKeyboardButton(f"👉 Details #{item['id']} ({item['email'][:16]})", callback_data=f"adm_view:{item['id']}")
+            ])
 
     nav_row = []
     if offset > 0:
         nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"adm_list:{status}:{max(0, offset - limit)}"))
-    if len(items) == limit:
+    if offset + limit < total_count:
         nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"adm_list:{status}:{offset + limit}"))
     if nav_row:
         keyboard_buttons.append(nav_row)
@@ -248,6 +328,102 @@ async def admin_list_resubmitted_callback(update: Update, context: ContextTypes.
         reply_markup=InlineKeyboardMarkup(keyboard_buttons)
     )
 
+async def complete_admin_verdict(query, context, sub_id: int, sub: dict, verdict: str, note: Optional[str] = None):
+    # Check if this update originated from an alert notification message in admin chat
+    is_alert = False
+    if query.message and query.message.text:
+        is_alert = (
+            "🔔 New Submission Received!" in query.message.text
+            or "🔄 Resubmitted Details Received!" in query.message.text
+        )
+
+    verdict_labels = {
+        "ACCEPTED": "✅ APPROVED",
+        "DISAPPROVED": "❌ DISAPPROVED",
+        "CAN_RESUBMIT": "🔄 UNLOCKED FOR RESUBMIT"
+    }
+    v_label = verdict_labels.get(verdict, verdict)
+
+    if is_alert:
+        # Alert message in admin DM: cleanly replace with receipt and hide/dismiss buttons
+        text = (
+            f"<b>{v_label}</b> — Submission #{sub_id}\n"
+            f"📧 <code>{sub['email']}</code>\n"
+        )
+        if note:
+            text += f"📝 <i>{note}</i>\n"
+        text += (
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>Account processed & hidden from active queue!</i>"
+        )
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🗑️ Dismiss", callback_data="adm_msg_delete"),
+                InlineKeyboardButton("⚙️ Dashboard", callback_data="adm_dashboard_nav")
+            ]
+        ])
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception:
+            pass
+        return
+
+    # Inside Dashboard: immediately remove this account from screen and show next in queue!
+    remaining = await db.get_submissions_by_status("PENDING", limit=5, offset=0)
+    total_remaining = await db.get_submissions_count_by_status("PENDING")
+
+    text = (
+        f"<b>{v_label}: Submission #{sub_id}</b>\n"
+        f"📧 <code>{sub['email']}</code>\n"
+    )
+    if note:
+        text += f"📝 <i>{note}</i>\n"
+    text += (
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>Account verdict saved & removed from queue!</i>\n\n"
+    )
+
+    if not remaining:
+        text += (
+            f"🎉 <b>In-Queue is completely clear!</b>\n"
+            f"No more accounts are currently waiting for review."
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ View Approved Gmails", callback_data="adm_list:ACCEPTED:0")],
+            [InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]
+        ])
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    text += f"⏳ <b>Next Accounts in Queue ({total_remaining} waiting):</b>\n\n"
+    kb_buttons = []
+    for i, item in enumerate(remaining, 1):
+        is_resub = " <i>(RESUB)</i>" if item.get("is_resubmission") else ""
+        pass_val = item.get('pass_code') or item.get('full_name') or 'N/A'
+        key_val = item.get('key_code') or item.get('unique_code') or 'N/A'
+        text += (
+            f"<b>{i}.</b> 📧 <code>{item['email']}</code>{is_resub}\n"
+            f"   • 🆔 #{item['id']} | 🔒 <code>{pass_val}</code> | 🔑 <code>{key_val}</code>\n\n"
+        )
+        kb_buttons.append([
+            InlineKeyboardButton(f"👉 Review #{item['id']} ({item['email'][:16]})", callback_data=f"adm_view:{item['id']}")
+        ])
+
+    if total_remaining > 5:
+        kb_buttons.append([InlineKeyboardButton("Next Page ➡️", callback_data="adm_list:PENDING:5")])
+
+    kb_buttons.append([InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")])
+
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb_buttons))
+
+async def admin_delete_msg_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
 async def admin_view_submission_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -257,7 +433,13 @@ async def admin_view_submission_callback(update: Update, context: ContextTypes.D
     sub_id = int(query.data.split(":")[1])
     sub = await db.get_submission_by_id(sub_id)
     if not sub:
-        await query.edit_message_text("⚠️ Submission not found.")
+        await query.edit_message_text(
+            f"⚠️ <b>Submission #{sub_id} Not Found</b>\n\n"
+            f"This account is not in the database.\n"
+            f"<i>(It may have been submitted in an earlier session prior to persistent volume storage)</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]])
+        )
         return
 
     q_info = await db.get_queue_info(sub_id) if sub["status"] == "PENDING" else None
@@ -279,7 +461,11 @@ async def admin_change_status_callback(update: Update, context: ContextTypes.DEF
 
     sub = await db.get_submission_by_id(sub_id)
     if not sub:
-        await query.edit_message_text("⚠️ Submission not found.")
+        await query.edit_message_text(
+            f"⚠️ <b>Submission #{sub_id} Not Found</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]])
+        )
         return
 
     updated_sub = await db.update_submission_status(sub_id, new_status)
@@ -336,7 +522,7 @@ async def admin_change_status_callback(update: Update, context: ContextTypes.DEF
             f"💰 <b>CLAIM YOUR PAYMENT:</b>\n"
             f"Please message admin directly on Telegram to receive your payment for this account:\n\n"
             f"👉 <b>Telegram ID:</b> {tg_contact}\n\n"
-            f"<i>Send a message to {tg_contact} quoting Submission ID #{sub_id} with your payment details to receive your payout!</i>"
+            f"<i>Send a message quoting Submission ID #{sub_id} with your payment details to receive your payout!</i>"
         )
         pay_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton(f"💬 Message {tg_contact} for Payment", url=f"https://t.me/{clean_handle}")]
@@ -351,16 +537,7 @@ async def admin_change_status_callback(update: Update, context: ContextTypes.DEF
         except Exception:
             pass
 
-        # Remove from chat and maintain in category buttons
-        await query.answer(f"✅ Approved #{sub_id} & removed from chat! Maintained in 'Approved Submissions' category.", show_alert=False)
-        try:
-            await query.message.delete()
-        except Exception:
-            await query.edit_message_text(
-                f"✅ <b>Submission #{sub_id} Approved!</b>\n<i>(Maintained under '✅ Approved Submissions' in Dashboard)</i>",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]])
-            )
+        await complete_admin_verdict(query, context, sub_id, sub, "ACCEPTED")
         return
 
     # Update admin message for other statuses (e.g. IN_REVIEW)
@@ -406,7 +583,11 @@ async def admin_disapprove_do_callback(update: Update, context: ContextTypes.DEF
 
     sub = await db.get_submission_by_id(sub_id)
     if not sub:
-        await query.edit_message_text("⚠️ Submission not found.")
+        await query.edit_message_text(
+            f"⚠️ <b>Submission #{sub_id} Not Found</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]])
+        )
         return
 
     updated_sub = await db.update_submission_status(sub_id, "DISAPPROVED", admin_notes=reason)
@@ -424,16 +605,8 @@ async def admin_disapprove_do_callback(update: Update, context: ContextTypes.DEF
     except Exception:
         pass
 
-    # Remove from chat and maintain in category buttons
-    await query.answer(f"❌ Disapproved #{sub_id} & removed from chat! Maintained in 'Disapproved Submissions' category.", show_alert=False)
-    try:
-        await query.message.delete()
-    except Exception:
-        await query.edit_message_text(
-            f"❌ <b>Submission #{sub_id} Disapproved!</b>\n<i>(Maintained under '❌ Disapproved Submissions' in Dashboard)</i>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]])
-        )
+    await query.answer(f"❌ Disapproved #{sub_id}!", show_alert=False)
+    await complete_admin_verdict(query, context, sub_id, sub, "DISAPPROVED", note=reason)
 
 async def admin_resubmit_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -465,7 +638,11 @@ async def admin_resubmit_do_callback(update: Update, context: ContextTypes.DEFAU
 
     sub = await db.get_submission_by_id(sub_id)
     if not sub:
-        await query.edit_message_text("⚠️ Submission not found.")
+        await query.edit_message_text(
+            f"⚠️ <b>Submission #{sub_id} Not Found</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]])
+        )
         return
 
     updated_sub = await db.update_submission_status(sub_id, "CAN_RESUBMIT", admin_notes=reason)
@@ -484,13 +661,8 @@ async def admin_resubmit_do_callback(update: Update, context: ContextTypes.DEFAU
     except Exception:
         pass
 
-    card_text = format_admin_submission_card(updated_sub)
-    kb = admin_submission_actions_keyboard(sub_id, "CAN_RESUBMIT")
-    await query.edit_message_text(
-        f"🔄 <b>Submission #{sub_id} marked as CAN_RESUBMIT!</b>\n\n" + card_text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=kb
-    )
+    await query.answer(f"🔄 Resubmit Unlocked #{sub_id}!", show_alert=False)
+    await complete_admin_verdict(query, context, sub_id, sub, "CAN_RESUBMIT", note=reason)
 
 async def admin_appeals_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -778,12 +950,21 @@ async def admin_export_txt_callback(update: Update, context: ContextTypes.DEFAUL
     if not is_admin(query.from_user.id):
         return
 
-    submissions = await db.get_all_submissions()
+    data = query.data or ""
+    if "ACCEPTED" in data:
+        submissions = await db.get_submissions_by_status("ACCEPTED", limit=100000)
+        filename = "approved_gmails.txt"
+        title = "Approved Gmails (TXT Format)"
+    else:
+        submissions = await db.get_all_submissions()
+        filename = "submissions_export.txt"
+        title = "Submissions Data (TXT Format)"
+
     txt_bytes = await generate_txt_file(submissions)
 
     await query.message.reply_document(
-        document=InputFile(txt_bytes, filename="submissions_export.txt"),
-        caption=f"📄 <b>Submissions Data (TXT Format)</b>\nTotal records: {len(submissions)}",
+        document=InputFile(txt_bytes, filename=filename),
+        caption=f"📄 <b>{title}</b>\nTotal records: {len(submissions)}",
         parse_mode=ParseMode.HTML
     )
 

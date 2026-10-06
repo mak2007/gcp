@@ -87,7 +87,8 @@ from handlers.admin import (
     admin_setchannel_command,
     admin_setvideo_command,
     admin_setsupport_command,
-    WAIT_ADMIN_SETTING_VALUE
+    WAIT_ADMIN_SETTING_VALUE,
+    admin_delete_msg_callback
 )
 
 # Logging configuration
@@ -260,9 +261,10 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_view_appeal_callback, pattern=r"^adm_app_view:"))
     app.add_handler(CallbackQueryHandler(admin_appeal_decision_callback, pattern=r"^app_dec:"))
     app.add_handler(CallbackQueryHandler(admin_export_csv_callback, pattern=r"^adm_export_csv$"))
-    app.add_handler(CallbackQueryHandler(admin_export_txt_callback, pattern=r"^adm_export_txt$"))
+    app.add_handler(CallbackQueryHandler(admin_export_txt_callback, pattern=r"^adm_export_txt(:.*)?$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_do_callback, pattern=r"^adm_bcast_do$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_cancel_callback, pattern=r"^adm_bcast_cancel$"))
+    app.add_handler(CallbackQueryHandler(admin_delete_msg_callback, pattern=r"^adm_msg_delete$"))
 
     # Global Error Handler
     app.add_error_handler(error_handler)
