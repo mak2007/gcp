@@ -88,7 +88,10 @@ from handlers.admin import (
     admin_setvideo_command,
     admin_setsupport_command,
     WAIT_ADMIN_SETTING_VALUE,
-    admin_delete_msg_callback
+    admin_delete_msg_callback,
+    admin_approve_menu_callback,
+    admin_approve_do_callback,
+    admin_list_tier_callback
 )
 
 # Logging configuration
@@ -103,7 +106,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def post_init(application):
     await db.init_db()
-    logger.info("Database initialized successfully.")
+    logger.info(f"Database initialized successfully at: {db.DB_PATH}")
+    print(f"📂 DATABASE PERSISTENCE PATH: {db.DB_PATH}")
     bot_info = await application.bot.get_me()
     logger.info(f"Bot connected as @{bot_info.username} (ID: {bot_info.id})")
     if ADMIN_IDS:
@@ -250,9 +254,12 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_stats_callback, pattern=r"^adm_stats$"))
     app.add_handler(CallbackQueryHandler(admin_settings_menu_callback, pattern=r"^adm_settings_menu$"))
     app.add_handler(CallbackQueryHandler(admin_list_submissions_callback, pattern=r"^adm_list:"))
+    app.add_handler(CallbackQueryHandler(admin_list_tier_callback, pattern=r"^adm_tier_list:(NORMAL|PREMIUM):\d+$"))
     app.add_handler(CallbackQueryHandler(admin_list_resubmitted_callback, pattern=r"^adm_resub_list:"))
     app.add_handler(CallbackQueryHandler(admin_view_submission_callback, pattern=r"^adm_view:"))
     app.add_handler(CallbackQueryHandler(admin_change_status_callback, pattern=r"^adm_st:"))
+    app.add_handler(CallbackQueryHandler(admin_approve_menu_callback, pattern=r"^adm_appr_menu:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_approve_do_callback, pattern=r"^adm_appr_do:\d+:(NORMAL|PREMIUM)$"))
     app.add_handler(CallbackQueryHandler(admin_disapprove_menu_callback, pattern=r"^adm_dis:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_disapprove_do_callback, pattern=r"^adm_dis_do:"))
     app.add_handler(CallbackQueryHandler(admin_resubmit_menu_callback, pattern=r"^adm_res:\d+$"))
@@ -265,6 +272,11 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_broadcast_do_callback, pattern=r"^adm_bcast_do$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_cancel_callback, pattern=r"^adm_bcast_cancel$"))
     app.add_handler(CallbackQueryHandler(admin_delete_msg_callback, pattern=r"^adm_msg_delete$"))
+
+    # Fallback global submission confirmation handlers (ensures clicks succeed even after server restart)
+    app.add_handler(CallbackQueryHandler(sub_confirm_callback, pattern=r"^sub_confirm$"))
+    app.add_handler(CallbackQueryHandler(sub_restart_callback, pattern=r"^sub_restart$"))
+    app.add_handler(CallbackQueryHandler(sub_cancel_callback, pattern=r"^sub_cancel$"))
 
     # Global Error Handler
     app.add_error_handler(error_handler)

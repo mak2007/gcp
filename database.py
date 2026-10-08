@@ -1,9 +1,19 @@
+import os
+import shutil
 import aiosqlite
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from config import DB_PATH
 
 async def init_db():
+    local_db = os.path.abspath(os.path.join(os.path.dirname(__file__), "bot_database.sqlite"))
+    if DB_PATH != local_db and os.path.exists(local_db) and not os.path.exists(DB_PATH):
+        try:
+            os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+            shutil.copy2(local_db, DB_PATH)
+        except Exception:
+            pass
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA journal_mode=WAL;")
         await db.execute("PRAGMA busy_timeout = 5000;")
@@ -67,8 +77,8 @@ async def init_db():
             );
         """)
 
-        # Backward-compatible columns for PASS, Key, and Resubmissions
-        for col in ["pass_code", "key_code", "resubmitted_at", "resubmit_unlocked_at"]:
+        # Backward-compatible columns for PASS, Key, Resubmissions, and Approval Tier
+        for col in ["pass_code", "key_code", "resubmitted_at", "resubmit_unlocked_at", "tier"]:
             try:
                 await db.execute(f"ALTER TABLE submissions ADD COLUMN {col} TEXT;")
             except Exception:
@@ -280,7 +290,12 @@ async def get_resubmitted_count() -> int:
         row = await cursor.fetchone()
         return row[0] if row else 0
 
-async def update_submission_status(submission_id: int, new_status: str, admin_notes: Optional[str] = None) -> Optional[Dict[str, Any]]:
+async def update_submission_status(
+    submission_id: int, 
+    new_status: str, 
+    admin_notes: Optional[str] = None,
+    tier: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     ts = now_iso()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -296,6 +311,18 @@ async def update_submission_status(submission_id: int, new_status: str, admin_no
                 "UPDATE submissions SET status = 'PENDING', admin_notes = ?, updated_at = ? WHERE id = ?",
                 (admin_notes, ts, submission_id)
             )
+        elif new_status == "ACCEPTED":
+            tier_val = (tier or "NORMAL").upper()
+            if admin_notes is not None:
+                await db.execute(
+                    "UPDATE submissions SET status = 'ACCEPTED', tier = ?, admin_notes = ?, updated_at = ? WHERE id = ?",
+                    (tier_val, admin_notes, ts, submission_id)
+                )
+            else:
+                await db.execute(
+                    "UPDATE submissions SET status = 'ACCEPTED', tier = ?, updated_at = ? WHERE id = ?",
+                    (tier_val, ts, submission_id)
+                )
         else:
             if admin_notes is not None:
                 await db.execute(
@@ -397,7 +424,49 @@ async def get_admin_stats() -> Dict[str, int]:
         app_row = await cursor_app.fetchone()
         stats["appeals_pending"] = app_row[0] if app_row else 0
 
+        # Normal vs Premium accepted accounts
+        cursor_norm = await db.execute("SELECT COUNT(*) FROM submissions WHERE status = 'ACCEPTED' AND (tier = 'NORMAL' OR tier IS NULL OR tier = '')")
+        row_norm = await cursor_norm.fetchone()
+        stats["accepted_normal"] = row_norm[0] if row_norm else 0
+
+        cursor_prem = await db.execute("SELECT COUNT(*) FROM submissions WHERE status = 'ACCEPTED' AND tier = 'PREMIUM'")
+        row_prem = await cursor_prem.fetchone()
+        stats["accepted_premium"] = row_prem[0] if row_prem else 0
+
         return stats
+
+async def get_submissions_by_tier(tier: str, status: str = "ACCEPTED", limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        tier_upper = (tier or "NORMAL").upper()
+        if tier_upper == "NORMAL":
+            cursor = await db.execute(
+                "SELECT * FROM submissions WHERE status = ? AND (tier = 'NORMAL' OR tier IS NULL OR tier = '') ORDER BY id ASC LIMIT ? OFFSET ?",
+                (status, limit, offset)
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM submissions WHERE status = ? AND tier = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                (status, tier_upper, limit, offset)
+            )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+async def get_submissions_count_by_tier(tier: str, status: str = "ACCEPTED") -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        tier_upper = (tier or "NORMAL").upper()
+        if tier_upper == "NORMAL":
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM submissions WHERE status = ? AND (tier = 'NORMAL' OR tier IS NULL OR tier = '')",
+                (status,)
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM submissions WHERE status = ? AND tier = ?",
+                (status, tier_upper)
+            )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
 
 async def get_submissions_by_status(status: str, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:

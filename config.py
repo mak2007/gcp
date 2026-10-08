@@ -38,23 +38,39 @@ def resolve_db_path() -> str:
     raw = get_env_flexible("DB_PATH")
     if raw:
         path = os.path.abspath(raw) if not os.path.isabs(raw) else raw
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        except Exception:
+            pass
         return path
 
-    # Automatically check common persistent volume paths for Railway, Docker, Render, etc.
-    candidate_mounts = [
-        os.getenv("RAILWAY_VOLUME_MOUNT_PATH"),
-        os.getenv("DATA_DIR"),
-        "/data",
-        "/app/data",
-        "/mnt/data"
-    ]
-    for mount in candidate_mounts:
-        if mount and os.path.exists(mount) and os.path.isdir(mount):
-            return os.path.abspath(os.path.join(mount, "bot_database.sqlite"))
+    # Check explicit volume environment variables first and create dir
+    for env_var in ["RAILWAY_VOLUME_MOUNT_PATH", "DATA_DIR"]:
+        val = os.getenv(env_var)
+        if val:
+            try:
+                os.makedirs(val, exist_ok=True)
+                target = os.path.abspath(os.path.join(val, "bot_database.sqlite"))
+                return target
+            except Exception:
+                pass
+
+    # Check common mounted volume paths if they exist and are writable
+    for mount in ["/data", "/app/data", "/mnt/data"]:
+        if os.path.exists(mount) and os.path.isdir(mount):
+            try:
+                # Test write access
+                test_file = os.path.join(mount, ".perm_test")
+                with open(test_file, "w") as f:
+                    f.write("ok")
+                os.remove(test_file)
+                return os.path.abspath(os.path.join(mount, "bot_database.sqlite"))
+            except Exception:
+                pass
 
     # Local directory default
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "bot_database.sqlite"))
+    local_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "bot_database.sqlite"))
+    return local_path
 
 DB_PATH: str = resolve_db_path()
 REQUIRED_CHANNEL: str = get_env_flexible("REQUIRED_CHANNEL", "https://t.me/LALAJIIIIIIIIII")

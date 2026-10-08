@@ -331,11 +331,36 @@ async def run_tests():
     assert k_p == "MY_KEY_888"
     print("✅ Review details extraction fallback verified.")
 
+    # 20. Test 2-Tier Approval (Normal vs Premium) and Tier Exports
+    from handlers.admin import generate_txt_file
+    tier_norm_id = await db.create_submission(1001, "norm_user", "norm@test.com", "PASS_NORM", "KEY_NORM")
+    await db.update_submission_status(tier_norm_id, "ACCEPTED", tier="NORMAL")
+    tier_prem_id = await db.create_submission(1002, "prem_user", "prem@test.com", "PASS_PREM", "KEY_PREM")
+    await db.update_submission_status(tier_prem_id, "ACCEPTED", tier="PREMIUM")
+
+    normal_subs = await db.get_submissions_by_tier("NORMAL")
+    assert any(s["id"] == tier_norm_id for s in normal_subs), "Normal submission must be in normal tier list"
+    assert not any(s["id"] == tier_prem_id for s in normal_subs), "Premium submission must NOT be in normal tier list"
+
+    premium_subs = await db.get_submissions_by_tier("PREMIUM")
+    assert any(s["id"] == tier_prem_id for s in premium_subs), "Premium submission must be in premium tier list"
+    assert not any(s["id"] == tier_norm_id for s in premium_subs), "Normal submission must NOT be in premium tier list"
+
+    stats_tier = await db.get_admin_stats()
+    assert stats_tier["accepted_normal"] >= 1, "Stats must count accepted normal submissions"
+    assert stats_tier["accepted_premium"] >= 1, "Stats must count accepted premium submissions"
+
+    # Verify TXT generation with quick format
+    txt_io = await generate_txt_file([{"id": tier_norm_id, "email": "norm@test.com", "pass_code": "PN", "key_code": "KN", "status": "ACCEPTED", "tier": "NORMAL", "created_at": "2026-10-09"}])
+    txt_data = txt_io.getvalue().decode("utf-8")
+    assert "norm@test.com:PN:KN" in txt_data, "Quick-copy EMAIL:PASS:KEY must be present in TXT export"
+    print("✅ 2-Tier Approval (Normal vs Premium) and categorized TXT exports verified.")
+
     # Cleanup test db
     if os.path.exists("test_bot.sqlite"):
         os.remove("test_bot.sqlite")
 
-    print("\n🎉 ALL 19 TEST SUITES PASSED PERFECTLY!")
+    print("\n🎉 ALL 20 TEST SUITES PASSED PERFECTLY!")
 
 if __name__ == "__main__":
     asyncio.run(run_tests())

@@ -6,7 +6,13 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 from config import ADMIN_IDS, SUPPORT_HANDLE
 import database as db
-from keyboards import admin_submission_actions_keyboard, admin_dashboard_keyboard, admin_settings_keyboard, main_menu_keyboard
+from keyboards import (
+    admin_submission_actions_keyboard,
+    admin_dashboard_keyboard,
+    admin_settings_keyboard,
+    main_menu_keyboard,
+    admin_approve_tier_keyboard
+)
 
 WAIT_ADMIN_SEARCH = 301
 WAIT_ADMIN_SETTING_VALUE = 304
@@ -35,6 +41,10 @@ def format_admin_submission_card(sub: dict, queue_info: dict = None) -> str:
         f"📅 <b>Submitted Date:</b> {sub['created_at']}\n"
         f"📊 <b>Status:</b> <b>{status_str}</b>\n"
     )
+    if sub.get("tier"):
+        tier_label = "⭐ Premium" if sub["tier"] == "PREMIUM" else "🟢 Normal"
+        text += f"🏷️ <b>Tier:</b> <b>{tier_label}</b>\n"
+
     if sub.get("is_resubmission"):
         text += f"🔄 <b>Resubmitted At:</b> {sub.get('resubmitted_at') or sub.get('updated_at')}\n"
 
@@ -263,6 +273,76 @@ async def admin_list_submissions_callback(update: Update, context: ContextTypes.
         reply_markup=InlineKeyboardMarkup(keyboard_buttons)
     )
 
+async def admin_list_tier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    # Callback format: adm_tier_list:<TIER>:<OFFSET>
+    parts = query.data.split(":")
+    tier = parts[1].upper()
+    offset = int(parts[2]) if len(parts) > 2 else 0
+    limit = 5
+
+    items = await db.get_submissions_by_tier(tier, status="ACCEPTED", limit=limit, offset=offset)
+    total_count = await db.get_submissions_count_by_tier(tier, status="ACCEPTED")
+    page_num = offset // limit + 1
+    total_pages = max(1, (total_count + limit - 1) // limit)
+
+    tier_title = "⭐ Premium Approved Gmails" if tier == "PREMIUM" else "🟢 Normal Approved Gmails"
+    tier_emoji = "⭐" if tier == "PREMIUM" else "🟢"
+
+    if not items:
+        await query.edit_message_text(
+            f"ℹ️ No accounts found under <b>{tier_title}</b>.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")
+            ]])
+        )
+        return
+
+    text = (
+        f"{tier_emoji} <b>{tier_title}</b>\n"
+        f"📊 Total {tier.capitalize()}: <b>{total_count}</b> | Page {page_num}/{total_pages}\n"
+        f"━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+    keyboard_buttons = []
+    for i, item in enumerate(items, start=offset + 1):
+        pass_val = item.get('pass_code') or item.get('full_name') or 'N/A'
+        key_val = item.get('key_code') or item.get('unique_code') or 'N/A'
+        text += (
+            f"<b>{i}.</b> 📧 <code>{item['email']}</code>\n"
+            f"   • 🆔 #{item['id']} | 👤 @{item.get('username') or 'None'}\n"
+            f"   • 🔒 PASS: <code>{pass_val}</code>\n"
+            f"   • 🔑 Key: <code>{key_val}</code>\n"
+            f"   • 📅 {item['created_at']}\n\n"
+        )
+        keyboard_buttons.append([
+            InlineKeyboardButton(f"👉 Details #{item['id']} ({item['email'][:16]})", callback_data=f"adm_view:{item['id']}")
+        ])
+
+    keyboard_buttons.append([
+        InlineKeyboardButton(f"📄 Export {tier.capitalize()} TXT", callback_data=f"adm_export_txt:{tier}")
+    ])
+
+    nav_row = []
+    if offset > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"adm_tier_list:{tier}:{max(0, offset - limit)}"))
+    if offset + limit < total_count:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"adm_tier_list:{tier}:{offset + limit}"))
+    if nav_row:
+        keyboard_buttons.append(nav_row)
+
+    keyboard_buttons.append([InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")])
+
+    await query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard_buttons)
+    )
+
 async def admin_list_resubmitted_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -329,7 +409,7 @@ async def admin_list_resubmitted_callback(update: Update, context: ContextTypes.
         reply_markup=InlineKeyboardMarkup(keyboard_buttons)
     )
 
-async def complete_admin_verdict(query, context, sub_id: int, sub: dict, verdict: str, note: Optional[str] = None):
+async def complete_admin_verdict(query, context, sub_id: int, sub: dict, verdict: str, note: Optional[str] = None, tier: Optional[str] = None):
     # Check if this update originated from an alert notification message in admin chat
     is_alert = False
     if query.message and query.message.text:
@@ -339,7 +419,7 @@ async def complete_admin_verdict(query, context, sub_id: int, sub: dict, verdict
         )
 
     verdict_labels = {
-        "ACCEPTED": "✅ APPROVED",
+        "ACCEPTED": f"✅ APPROVED [{'⭐ PREMIUM' if tier == 'PREMIUM' else '🟢 NORMAL'}]",
         "DISAPPROVED": "❌ DISAPPROVED",
         "CAN_RESUBMIT": "🔄 UNLOCKED FOR RESUBMIT"
     }
@@ -390,7 +470,10 @@ async def complete_admin_verdict(query, context, sub_id: int, sub: dict, verdict
             f"No more accounts are currently waiting for review."
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ View Approved Gmails", callback_data="adm_list:ACCEPTED:0")],
+            [
+                InlineKeyboardButton("🟢 Normal Gmails", callback_data="adm_tier_list:NORMAL:0"),
+                InlineKeyboardButton("⭐ Premium Gmails", callback_data="adm_tier_list:PREMIUM:0")
+            ],
             [InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]
         ])
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
@@ -510,35 +593,8 @@ async def admin_change_status_callback(update: Update, context: ContextTypes.DEF
             pass
 
     elif new_status == "ACCEPTED":
-        current_handle = await db.get_support_handle()
-        tg_contact = current_handle if current_handle.startswith("@") else f"@{current_handle}"
-        clean_handle = tg_contact.lstrip("@")
-        user_msg = (
-            f"🎉 <b>Status Update: Submission Approved!</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"✅ <b>Your submission (ID: #{sub_id}) has been APPROVED!</b>\n\n"
-            f"📧 <b>Email:</b> <code>{sub['email']}</code>\n"
-            f"📅 <b>Submitted Date:</b> {sub['created_at']}\n"
-            f"━━━━━━━━━━━━━━━━━━━\n\n"
-            f"💰 <b>CLAIM YOUR PAYMENT:</b>\n"
-            f"Please message admin directly on Telegram to receive your payment for this account:\n\n"
-            f"👉 <b>Telegram ID:</b> {tg_contact}\n\n"
-            f"<i>Send a message quoting Submission ID #{sub_id} with your payment details to receive your payout!</i>"
-        )
-        pay_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"💬 Message {tg_contact} for Payment", url=f"https://t.me/{clean_handle}")]
-        ])
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=user_msg,
-                parse_mode=ParseMode.HTML,
-                reply_markup=pay_kb
-            )
-        except Exception:
-            pass
-
-        await complete_admin_verdict(query, context, sub_id, sub, "ACCEPTED")
+        # Route to 2-tier approval menu (1-Normal, 2-Premium)
+        await admin_approve_menu_callback(update, context)
         return
 
     # Update admin message for other statuses (e.g. IN_REVIEW)
@@ -551,6 +607,101 @@ async def admin_change_status_callback(update: Update, context: ContextTypes.DEF
         parse_mode=ParseMode.HTML,
         reply_markup=kb
     )
+
+async def admin_approve_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    # Callback format: adm_appr_menu:<SUB_ID> or adm_st:<SUB_ID>:ACCEPTED
+    parts = query.data.split(":")
+    sub_id = int(parts[1])
+    sub = await db.get_submission_by_id(sub_id)
+    if not sub:
+        await query.edit_message_text(
+            f"⚠️ <b>Submission #{sub_id} Not Found</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]])
+        )
+        return
+
+    pass_val = sub.get("pass_code") or sub.get("full_name") or "N/A"
+    key_val = sub.get("key_code") or sub.get("unique_code") or "N/A"
+
+    prompt_text = (
+        f"🌟 <b>Select Approval Tier for Submission #{sub_id}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"📧 <b>Email:</b> <code>{sub['email']}</code>\n"
+        f"🔒 <b>PASS:</b> <code>{pass_val}</code>\n"
+        f"🔑 <b>Key:</b> <code>{key_val}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Please select the classification for this account:\n\n"
+        f"<b>1️⃣ Normal</b> — Standard approved Gmail\n"
+        f"<b>2️⃣ Premium</b> — Premium approved Gmail\n\n"
+        f"<i>The account will be moved to that category accordingly.</i>"
+    )
+    kb = admin_approve_tier_keyboard(sub_id)
+    await query.edit_message_text(prompt_text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+async def admin_approve_do_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+
+    # Callback format: adm_appr_do:<SUB_ID>:<TIER>
+    parts = query.data.split(":")
+    sub_id = int(parts[1])
+    tier = parts[2].upper()  # "NORMAL" or "PREMIUM"
+
+    sub = await db.get_submission_by_id(sub_id)
+    if not sub:
+        await query.edit_message_text(
+            f"⚠️ <b>Submission #{sub_id} Not Found</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="adm_dashboard_nav")]])
+        )
+        return
+
+    updated_sub = await db.update_submission_status(sub_id, "ACCEPTED", tier=tier)
+    user_id = sub["user_id"]
+
+    current_handle = await db.get_support_handle()
+    tg_contact = current_handle if current_handle.startswith("@") else f"@{current_handle}"
+    clean_handle = tg_contact.lstrip("@")
+
+    tier_badge = "⭐ PREMIUM" if tier == "PREMIUM" else "🟢 NORMAL"
+    tier_name = "Premium" if tier == "PREMIUM" else "Normal"
+
+    user_msg = (
+        f"🎉 <b>Status Update: Submission Approved ({tier_name})!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"✅ <b>Your submission (ID: #{sub_id}) has been APPROVED as {tier_badge}!</b>\n\n"
+        f"📧 <b>Email:</b> <code>{sub['email']}</code>\n"
+        f"🏷️ <b>Tier:</b> <b>{tier_badge}</b>\n"
+        f"📅 <b>Submitted Date:</b> {sub['created_at']}\n"
+        f"━━━━━━━━━━━━━━━━━━━\n\n"
+        f"💰 <b>CLAIM YOUR PAYMENT:</b>\n"
+        f"Please message admin directly on Telegram to receive your payment for this account:\n\n"
+        f"👉 <b>Telegram ID:</b> {tg_contact}\n\n"
+        f"<i>Send a message quoting Submission ID #{sub_id} (Tier: {tier_name}) with your payment details to receive your payout!</i>"
+    )
+    pay_kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"💬 Message {tg_contact} for Payment", url=f"https://t.me/{clean_handle}")]
+    ])
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=user_msg,
+            parse_mode=ParseMode.HTML,
+            reply_markup=pay_kb
+        )
+    except Exception:
+        pass
+
+    await query.answer(f"✅ Approved as {tier_name} #{sub_id}!", show_alert=False)
+    await complete_admin_verdict(query, context, sub_id, sub, "ACCEPTED", tier=tier)
 
 async def admin_disapprove_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -863,27 +1014,38 @@ async def admin_export_csv_callback(update: Update, context: ContextTypes.DEFAUL
         parse_mode=ParseMode.HTML
     )
 
-async def generate_txt_file(submissions: list) -> io.BytesIO:
+async def generate_txt_file(submissions: list, title_label: str = "SUBMISSIONS DATA") -> io.BytesIO:
     lines = [
         "=" * 60,
-        "MADCORN BOT - SUBMISSIONS DATA EXPORT (TEXT FORMAT)",
+        f"MADCORN BOT - {title_label} ({len(submissions)} ACCOUNTS)",
+        f"Generated: {db.now_iso()}",
         f"Total Records: {len(submissions)}",
         "=" * 60,
-        ""
+        "",
+        "--- DETAILED ACCOUNTS LIST ---"
     ]
-    for s in submissions:
+    for idx, s in enumerate(submissions, 1):
         pass_val = s.get("pass_code") or s.get("full_name") or "N/A"
         key_val = s.get("key_code") or s.get("unique_code") or "N/A"
-        lines.append(f"[Submission #{s['id']}] Date: {s['created_at']}")
+        tier_val = s.get("tier") or ("PREMIUM" if s.get("tier") == "PREMIUM" else "NORMAL")
+        lines.append(f"[{idx}] ID: #{s['id']} | Tier: {tier_val}")
         lines.append(f"  • Email:    {s['email']}")
         lines.append(f"  • PASS:     {pass_val}")
         lines.append(f"  • Key:      {key_val}")
-        lines.append(f"  • Status:   {s['status']}")
-        lines.append(f"  • User:     @{s.get('username') or 'None'} (ID: {s['user_id']})")
+        lines.append(f"  • Status:   {s.get('status', 'N/A')}")
+        lines.append(f"  • User:     @{s.get('username') or 'None'} (ID: {s.get('user_id', 'N/A')})")
         if s.get("admin_notes"):
             lines.append(f"  • Notes:    {s['admin_notes']}")
+        lines.append(f"  • Date:     {s['created_at']}")
         lines.append("-" * 60)
-        lines.append("")
+
+    lines.append("")
+    lines.append("--- QUICK COPY FORMAT (EMAIL:PASS:KEY) ---")
+    for s in submissions:
+        pass_val = s.get("pass_code") or s.get("full_name") or ""
+        key_val = s.get("key_code") or s.get("unique_code") or ""
+        lines.append(f"{s['email']}:{pass_val}:{key_val}")
+    lines.append("=" * 60)
 
     txt_content = "\n".join(lines)
     txt_bytes = io.BytesIO(txt_content.encode("utf-8"))
@@ -903,7 +1065,8 @@ async def generate_batch_txt_file(submissions: list, count: int) -> io.BytesIO:
         pass_val = s.get("pass_code") or s.get("full_name") or "N/A"
         key_val = s.get("key_code") or s.get("unique_code") or "N/A"
         resub_flag = "Yes" if s.get("is_resubmission") else "No"
-        lines.append(f"[{idx}] ID: #{s['id']}")
+        tier_val = s.get("tier") or ("PREMIUM" if s.get("tier") == "PREMIUM" else "NORMAL")
+        lines.append(f"[{idx}] ID: #{s['id']} | Tier: {tier_val}")
         lines.append(f"  • Email:        {s['email']}")
         lines.append(f"  • PASS:         {pass_val}")
         lines.append(f"  • Key:          {key_val}")
@@ -951,17 +1114,29 @@ async def admin_export_txt_callback(update: Update, context: ContextTypes.DEFAUL
     if not is_admin(query.from_user.id):
         return
 
-    data = query.data or ""
-    if "ACCEPTED" in data:
+    data = (query.data or "").upper()
+    if "NORMAL" in data:
+        submissions = await db.get_submissions_by_tier("NORMAL", status="ACCEPTED", limit=100000)
+        filename = "normal_gmails.txt"
+        title = "Normal Approved Gmails (TXT Format)"
+        title_label = "NORMAL APPROVED GMAILS"
+    elif "PREMIUM" in data:
+        submissions = await db.get_submissions_by_tier("PREMIUM", status="ACCEPTED", limit=100000)
+        filename = "premium_gmails.txt"
+        title = "Premium Approved Gmails (TXT Format)"
+        title_label = "PREMIUM APPROVED GMAILS"
+    elif "ACCEPTED" in data:
         submissions = await db.get_submissions_by_status("ACCEPTED", limit=100000)
-        filename = "approved_gmails.txt"
-        title = "Approved Gmails (TXT Format)"
+        filename = "all_approved_gmails.txt"
+        title = "All Approved Gmails (TXT Format)"
+        title_label = "ALL APPROVED GMAILS"
     else:
         submissions = await db.get_all_submissions()
-        filename = "submissions_export.txt"
-        title = "Submissions Data (TXT Format)"
+        filename = "all_submissions_export.txt"
+        title = "All Submissions (TXT Format)"
+        title_label = "ALL SUBMISSIONS EXPORT"
 
-    txt_bytes = await generate_txt_file(submissions)
+    txt_bytes = await generate_txt_file(submissions, title_label=title_label)
 
     await query.message.reply_document(
         document=InputFile(txt_bytes, filename=filename),
